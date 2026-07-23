@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { Channel } from "@/lib/types/db";
 import { poster } from "@/lib/format";
+import { flagEmoji } from "@/lib/geo";
 import { Radio, Tv } from "lucide-react";
 
 export function ChannelCard({ channel }: { channel: Channel }) {
@@ -32,6 +33,11 @@ export function ChannelCard({ channel }: { channel: Channel }) {
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-crit" /> EN VIVO
           </span>
           <span className="font-mono text-[10px] text-ink-3">{channel.categories?.[0] ?? channel.kind}</span>
+          {channel.country && (
+            <span className="font-mono text-[10px] text-ink-3" title={channel.country}>
+              {flagEmoji(channel.country) || channel.country}
+            </span>
+          )}
         </div>
       </div>
     </Link>

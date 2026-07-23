@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { DownloadCloud, Clapperboard, CalendarClock, Tv } from "lucide-react";
+import { DownloadCloud, Clapperboard, CalendarClock, Tv, Globe } from "lucide-react";
+import { LIVE_SOURCES } from "@/lib/live/sources";
 
 // ── Playlist de ejemplo AUTORIZADA (dominio público / streams de prueba) ──────
 const SAMPLE_M3U = `#EXTM3U
@@ -55,6 +56,9 @@ export function ImportPanel() {
   const [epgUrl, setEpgUrl] = useState("");
   const [out, setOut] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [sourceId, setSourceId] = useState(LIVE_SOURCES[0].id);
+  const [excludeCn, setExcludeCn] = useState(true);
+  const selectedSource = LIVE_SOURCES.find((s) => s.id === sourceId)!;
 
   async function post(path: string, body?: unknown, tag = path) {
     setBusy(tag);
@@ -101,6 +105,63 @@ export function ImportPanel() {
             {busy === "demo-epg" ? "Importando…" : "2 · Importar EPG de ejemplo"}
           </button>
         </div>
+      </section>
+
+      {/* Fuentes IPTV en vivo auto-actualizadas (HerbertHe/iptv-sources) */}
+      <section className="rounded-card border border-line bg-surface p-5">
+        <div className="mb-2 flex items-center gap-2">
+          <Globe size={18} className="text-accent" />
+          <h2 className="font-semibold">Fuentes IPTV en vivo (mundial)</h2>
+        </div>
+        <p className="mb-3 text-sm text-ink-3">
+          Importa catálogos IPTV agregados y auto-actualizados. Se crean como{" "}
+          <b>pendientes y no autorizados</b>; apruébalos en{" "}
+          <code className="text-ink-2">Admin → Revisión</code>. Los canales se
+          categorizan por género y país automáticamente.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+          <label className="block">
+            <span className="mb-1 block text-xs font-mono uppercase tracking-wide text-ink-3">Fuente</span>
+            <select
+              value={sourceId}
+              onChange={(e) => setSourceId(e.target.value)}
+              className="w-full rounded-[10px] border border-line bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
+            >
+              {LIVE_SOURCES.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                  {s.approxChannels ? ` · ~${s.approxChannels.toLocaleString("es-MX")} canales` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            onClick={() =>
+              post(
+                "/api/admin/import/live-source",
+                { source_id: sourceId, exclude_countries: excludeCn ? ["CN"] : [] },
+                "live-source",
+              )
+            }
+            disabled={busy === "live-source"}
+            className="rounded-pill bg-accent px-5 py-2.5 font-semibold text-white disabled:opacity-60"
+          >
+            {busy === "live-source" ? "Importando…" : "Importar catálogo"}
+          </button>
+        </div>
+        <p className="mt-2 text-[12px] text-ink-3">{selectedSource.description}</p>
+        <label className="mt-3 flex items-center gap-2 text-sm text-ink-2">
+          <input
+            type="checkbox"
+            checked={excludeCn}
+            onChange={(e) => setExcludeCn(e.target.checked)}
+            className="accent-accent"
+          />
+          Excluir canales de China
+        </label>
+        <p className="mt-2 text-[11px] text-ink-3">
+          Importar miles de canales puede tardar (≈15–40 s). No cierres la página.
+        </p>
       </section>
 
       <div className="grid gap-5 lg:grid-cols-2">

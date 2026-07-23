@@ -13,3 +13,8 @@ coverage
 .DS_Store
 supabase/.branches
 supabase/.temp
+.env*
+
+# scripts temporales de importación/mantenimiento (no forman parte de la app)
+/_*.ts
+.vercel

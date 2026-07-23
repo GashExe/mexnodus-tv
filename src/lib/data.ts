@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { createClient } from "@/lib/supabase/server";
 import type { Channel, ChannelStream, Episode, MediaTitle, Season } from "@/lib/types/db";
 
@@ -80,18 +81,109 @@ export async function getEpisodes(seasonId: string): Promise<Episode[]> {
   return (data as Episode[]) ?? [];
 }
 
-export async function getChannels(kind?: Channel["kind"]): Promise<Channel[]> {
+export interface ChannelQuery {
+  kind?: Channel["kind"];
+  country?: string;
+  category?: string;
+  limit?: number;
+}
+
+/**
+ * Canales activos, FILTRADOS EN EL SERVIDOR por país/categoría. Imprescindible:
+ * Supabase limita cada consulta a 1000 filas, así que sin filtro server-side los
+ * miles de canales importados quedarían invisibles. Con filtro (p.ej. país=MX)
+ * la consulta devuelve justo ese subconjunto.
+ */
+export async function getChannels(opts: ChannelQuery = {}): Promise<Channel[]> {
   const sb = await db();
-  let q = sb.from("channels").select("*").eq("is_active", true).order("logical_number");
-  if (kind) q = q.eq("kind", kind);
+  let q = sb.from("channels").select("*").eq("is_active", true);
+  if (opts.kind) q = q.eq("kind", opts.kind);
+  if (opts.country) q = q.eq("country", opts.country);
+  if (opts.category) q = q.contains("categories", [opts.category]);
+  q = q
+    .order("logical_number", { nullsFirst: false })
+    .order("name")
+    .limit(opts.limit ?? 1000);
   const { data } = await q;
   return (data as Channel[]) ?? [];
 }
+
+/**
+ * Facetas para los filtros. Los países se calculan sobre TODO el catálogo; las
+ * categorías, solo sobre los canales del país seleccionado (si lo hay), para
+ * que el desplegable no ofrezca categorías sin resultados. Pagina porque
+ * Supabase corta en 1000 filas por consulta. Cacheado por render.
+ */
+export const getChannelFacets = cache(
+  async (country?: string): Promise<{ countries: string[]; categories: string[] }> => {
+    const sb = await db();
+    const countries = new Set<string>();
+    const categories = new Set<string>();
+    for (let from = 0; from < 60000; from += 1000) {
+      const { data } = await sb
+        .from("channels")
+        .select("country, categories")
+        .eq("is_active", true)
+        .range(from, from + 999);
+      if (!data?.length) break;
+      for (const r of data as { country: string | null; categories: string[] | null }[]) {
+        if (r.country) countries.add(r.country);
+        if (!country || r.country === country) {
+          for (const c of r.categories ?? []) categories.add(c);
+        }
+      }
+      if (data.length < 1000) break;
+    }
+    return {
+      countries: [...countries].sort(),
+      categories: [...categories].sort((a, b) => a.localeCompare(b, "es")),
+    };
+  },
+);
 
 export async function getChannel(id: string): Promise<Channel | null> {
   const sb = await db();
   const { data } = await sb.from("channels").select("*").eq("id", id).maybeSingle();
   return (data as Channel) ?? null;
+}
+
+/**
+ * Canales similares para "quizá te guste": prioriza mismo país + categorías en
+ * común; rellena con el mismo país y, en último término, con la misma
+ * categoría en cualquier país. "General" no cuenta como afinidad.
+ */
+export async function getRelatedChannels(ch: Channel, limit = 9): Promise<Channel[]> {
+  const sb = await db();
+  const out: Channel[] = [];
+  const seen = new Set<string>([ch.id]);
+  const cats = (ch.categories ?? []).filter((c) => c !== "General");
+
+  const push = (rows: Channel[] | null) => {
+    for (const r of rows ?? []) {
+      if (out.length >= limit) return;
+      if (!seen.has(r.id)) {
+        seen.add(r.id);
+        out.push(r);
+      }
+    }
+  };
+
+  const base = () =>
+    sb.from("channels").select("*").eq("is_active", true).eq("kind", "tv").neq("id", ch.id);
+
+  if (ch.country && cats.length) {
+    const { data } = await base().eq("country", ch.country).overlaps("categories", cats).limit(limit);
+    push(data as Channel[]);
+  }
+  if (out.length < limit && ch.country) {
+    const { data } = await base().eq("country", ch.country).limit(limit * 2);
+    push(data as Channel[]);
+  }
+  if (out.length < limit && cats.length) {
+    const { data } = await base().overlaps("categories", cats).limit(limit * 2);
+    push(data as Channel[]);
+  }
+  return out;
 }
 
 export async function getPlayableChannelStreams(channelId: string): Promise<ChannelStream[]> {
@@ -113,22 +205,27 @@ export interface GuideEntry {
   next: { title: string; starts_at: string } | null;
 }
 
-/** Devuelve todos los canales activos con su programa actual y el siguiente. */
-export async function getGuide(): Promise<GuideEntry[]> {
+/**
+ * Canales (filtrados en servidor) con su programa actual y el siguiente.
+ * Toma los canales vía getChannels (respeta país/categoría y el tope de 1000) y
+ * cruza los programas SOLO de esos canales.
+ */
+export async function getGuide(opts: ChannelQuery = {}): Promise<GuideEntry[]> {
+  const channels = await getChannels(opts);
+  if (!channels.length) return [];
+
   const sb = await db();
   const nowIso = new Date().toISOString();
   const fromIso = new Date(Date.now() - 3 * 3600_000).toISOString();
   const toIso = new Date(Date.now() + 12 * 3600_000).toISOString();
 
-  const [{ data: channels }, { data: programs }] = await Promise.all([
-    sb.from("channels").select("*").eq("is_active", true).order("logical_number"),
-    sb
-      .from("programs")
-      .select("channel_id, title, starts_at, ends_at")
-      .gte("ends_at", fromIso)
-      .lte("starts_at", toIso)
-      .order("starts_at"),
-  ]);
+  const { data: programs } = await sb
+    .from("programs")
+    .select("channel_id, title, starts_at, ends_at")
+    .in("channel_id", channels.map((c) => c.id))
+    .gte("ends_at", fromIso)
+    .lte("starts_at", toIso)
+    .order("starts_at");
 
   const byChannel = new Map<string, { title: string; starts_at: string; ends_at: string }[]>();
   for (const p of (programs ?? []) as { channel_id: string; title: string; starts_at: string; ends_at: string }[]) {
@@ -137,7 +234,7 @@ export async function getGuide(): Promise<GuideEntry[]> {
     byChannel.set(p.channel_id, arr);
   }
 
-  return ((channels as Channel[]) ?? []).map((channel) => {
+  return channels.map((channel) => {
     const list = byChannel.get(channel.id) ?? [];
     const current = list.find((p) => p.starts_at <= nowIso && p.ends_at > nowIso) ?? null;
     const next = list.find((p) => p.starts_at > nowIso) ?? null;

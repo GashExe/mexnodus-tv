@@ -1,23 +1,32 @@
-import { getChannels, getGuide } from "@/lib/data";
+import { getChannels, getGuide, getChannelFacets } from "@/lib/data";
 import { ChannelCard } from "@/components/ChannelCard";
 import { EpgGuide } from "@/components/EpgGuide";
+import { CountryFilter } from "./CountryFilter";
+import { CategoryFilter } from "./CategoryFilter";
 import { Eyebrow, EmptyState } from "@/components/ui";
 import { Tv, LayoutGrid, ListTree } from "lucide-react";
 import Link from "next/link";
 
+const PAGE_LIMIT = 600;
+
 export default async function LivePage({
   searchParams,
 }: {
-  searchParams: Promise<{ cat?: string; view?: string }>;
+  searchParams: Promise<{ cat?: string; view?: string; country?: string }>;
 }) {
-  const { cat, view = "guide" } = await searchParams;
-  const [channels, guide] = await Promise.all([getChannels(), getGuide()]);
+  const { cat, view = "guide", country } = await searchParams;
+  // Filtrado EN SERVIDOR (Supabase corta en 1000/consulta). Las facetas salen de
+  // todo el catálogo; la cuadrícula/guía traen solo el subconjunto filtrado.
+  const [facets, filtered, guideFiltered] = await Promise.all([
+    getChannelFacets(country),
+    getChannels({ country, category: cat, limit: PAGE_LIMIT }),
+    getGuide({ country, category: cat, limit: PAGE_LIMIT }),
+  ]);
+  const { categories, countries } = facets;
+  const truncated = filtered.length >= PAGE_LIMIT;
 
-  const categories = Array.from(new Set(channels.flatMap((c) => c.categories ?? []))).sort();
-  const filtered = cat ? channels.filter((c) => (c.categories ?? []).includes(cat)) : channels;
-  const guideFiltered = cat ? guide.filter((g) => (g.channel.categories ?? []).includes(cat)) : guide;
-
-  const q = (v: string) => `/live?view=${v}${cat ? `&cat=${encodeURIComponent(cat)}` : ""}`;
+  const q = (v: string) =>
+    `/live?view=${v}${cat ? `&cat=${encodeURIComponent(cat)}` : ""}${country ? `&country=${country}` : ""}`;
 
   return (
     <div className="space-y-6">
@@ -44,27 +53,26 @@ export default async function LivePage({
         </div>
       </div>
 
-      {categories.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          <Link href={`/live?view=${view}`} className={`rounded-pill px-4 py-2 text-sm ${!cat ? "bg-surface-2 text-ink" : "border border-line bg-surface text-ink-2"}`}>
-            Todos
-          </Link>
-          {categories.map((c) => (
-            <Link
-              key={c}
-              href={`/live?view=${view}&cat=${encodeURIComponent(c)}`}
-              className={`rounded-pill px-4 py-2 text-sm capitalize ${cat === c ? "bg-surface-2 text-ink" : "border border-line bg-surface text-ink-2 hover:text-ink"}`}
-            >
-              {c}
-            </Link>
-          ))}
-        </div>
-      )}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+        {countries.length > 1 && (
+          <CountryFilter countries={countries} selected={country} view={view} cat={cat} />
+        )}
+        {categories.length > 0 && (
+          <CategoryFilter categories={categories} selected={cat} view={view} country={country} />
+        )}
+        <span className="ml-auto font-mono text-[12px] text-ink-3">
+          {truncated ? `${PAGE_LIMIT}+ canales · filtra para acotar` : `${filtered.length} canales`}
+        </span>
+      </div>
 
-      {channels.length === 0 ? (
+      {filtered.length === 0 ? (
         <EmptyState
-          title="No hay canales todavía"
-          hint="Ve a Admin → Importar → 'Cargar demo IPTV' para sembrar canales autorizados y su EPG."
+          title={country || cat ? "No hay canales para este filtro" : "No hay canales todavía"}
+          hint={
+            country || cat
+              ? "Prueba con otro país o categoría."
+              : "Ve a Admin → Importar para sembrar canales."
+          }
           icon={<Tv />}
         />
       ) : view === "guide" ? (

@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getActor, isStaff } from "@/lib/auth";
 import { assertSafeUrl, safeFetch } from "@/lib/ssrf";
-import { parseM3U, channelSlug } from "@/lib/m3u";
+import { parseM3U } from "@/lib/m3u";
+import { ingestChannels } from "@/lib/live/ingest";
 import { z } from "zod";
 
 const schema = z.object({
@@ -48,68 +49,12 @@ export async function POST(req: Request) {
     }
 
     const channels = parseM3U(text);
-    let created = 0;
-    let failed = 0;
-
-    for (const ch of channels) {
-      const slug = channelSlug(ch);
-      const safe = assertSafeUrl(ch.url);
-      if (!safe.ok) {
-        failed++;
-        await supabase.from("import_errors").insert({ job_id: jobId, raw: ch.url, error: safe.reason });
-        continue;
-      }
-      // canal canónico (upsert por slug); guarda tvg-id para cruzar el EPG
-      const { data: channel } = await supabase
-        .from("channels")
-        .upsert(
-          {
-            slug,
-            name: ch.name,
-            kind: "tv",
-            logo_path: ch.logo,
-            country: ch.country,
-            language: ch.language,
-            categories: ch.group ? [ch.group] : [],
-            epg_id: ch.tvgId ?? slug,
-          },
-          { onConflict: "slug" },
-        )
-        .select("id")
-        .single();
-      if (!channel) {
-        failed++;
-        continue;
-      }
-      // señal (no duplicar por url)
-      const { data: existing } = await supabase
-        .from("channel_streams")
-        .select("id")
-        .eq("channel_id", channel.id)
-        .eq("play_url", ch.url)
-        .maybeSingle();
-      if (!existing) {
-        // la primera señal del canal es la principal; las siguientes, respaldos
-        const { count } = await supabase
-          .from("channel_streams")
-          .select("id", { count: "exact", head: true })
-          .eq("channel_id", channel.id);
-        const isPrimary = (count ?? 0) === 0;
-        await supabase.from("channel_streams").insert({
-          channel_id: channel.id,
-          provider_id: provider_id ?? null,
-          label: isPrimary ? "Principal (M3U)" : "Respaldo (M3U)",
-          play_url: ch.url,
-          playback_type: "hls",
-          is_primary: isPrimary,
-          priority: isPrimary ? 10 : Math.max(0, 9 - (count ?? 0)),
-          tech_status: "unknown",
-          review_status: canAuthorize ? "approved" : "pending",
-          publish_authorization: canAuthorize ? "authorized" : "unauthorized",
-        });
-        created++;
-      }
-    }
+    const { created, failed } = await ingestChannels(supabase, channels, {
+      jobId,
+      providerId: provider_id ?? null,
+      canAuthorize,
+      labelPrefix: "M3U",
+    });
 
     await supabase
       .from("import_jobs")
