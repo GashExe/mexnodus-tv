@@ -59,7 +59,7 @@ export async function POST(req: Request) {
         await supabase.from("import_errors").insert({ job_id: jobId, raw: ch.url, error: safe.reason });
         continue;
       }
-      // canal canónico (upsert por slug)
+      // canal canónico (upsert por slug); guarda tvg-id para cruzar el EPG
       const { data: channel } = await supabase
         .from("channels")
         .upsert(
@@ -71,6 +71,7 @@ export async function POST(req: Request) {
             country: ch.country,
             language: ch.language,
             categories: ch.group ? [ch.group] : [],
+            epg_id: ch.tvgId ?? slug,
           },
           { onConflict: "slug" },
         )
@@ -88,13 +89,20 @@ export async function POST(req: Request) {
         .eq("play_url", ch.url)
         .maybeSingle();
       if (!existing) {
+        // la primera señal del canal es la principal; las siguientes, respaldos
+        const { count } = await supabase
+          .from("channel_streams")
+          .select("id", { count: "exact", head: true })
+          .eq("channel_id", channel.id);
+        const isPrimary = (count ?? 0) === 0;
         await supabase.from("channel_streams").insert({
           channel_id: channel.id,
           provider_id: provider_id ?? null,
-          label: "Importada M3U",
+          label: isPrimary ? "Principal (M3U)" : "Respaldo (M3U)",
           play_url: ch.url,
           playback_type: "hls",
-          is_primary: true,
+          is_primary: isPrimary,
+          priority: isPrimary ? 10 : Math.max(0, 9 - (count ?? 0)),
           tech_status: "unknown",
           review_status: canAuthorize ? "approved" : "pending",
           publish_authorization: canAuthorize ? "authorized" : "unauthorized",

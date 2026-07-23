@@ -107,6 +107,44 @@ export async function getPlayableChannelStreams(channelId: string): Promise<Chan
   return (data as ChannelStream[]) ?? [];
 }
 
+export interface GuideEntry {
+  channel: Channel;
+  current: { title: string; starts_at: string; ends_at: string } | null;
+  next: { title: string; starts_at: string } | null;
+}
+
+/** Devuelve todos los canales activos con su programa actual y el siguiente. */
+export async function getGuide(): Promise<GuideEntry[]> {
+  const sb = await db();
+  const nowIso = new Date().toISOString();
+  const fromIso = new Date(Date.now() - 3 * 3600_000).toISOString();
+  const toIso = new Date(Date.now() + 12 * 3600_000).toISOString();
+
+  const [{ data: channels }, { data: programs }] = await Promise.all([
+    sb.from("channels").select("*").eq("is_active", true).order("logical_number"),
+    sb
+      .from("programs")
+      .select("channel_id, title, starts_at, ends_at")
+      .gte("ends_at", fromIso)
+      .lte("starts_at", toIso)
+      .order("starts_at"),
+  ]);
+
+  const byChannel = new Map<string, { title: string; starts_at: string; ends_at: string }[]>();
+  for (const p of (programs ?? []) as { channel_id: string; title: string; starts_at: string; ends_at: string }[]) {
+    const arr = byChannel.get(p.channel_id) ?? [];
+    arr.push(p);
+    byChannel.set(p.channel_id, arr);
+  }
+
+  return ((channels as Channel[]) ?? []).map((channel) => {
+    const list = byChannel.get(channel.id) ?? [];
+    const current = list.find((p) => p.starts_at <= nowIso && p.ends_at > nowIso) ?? null;
+    const next = list.find((p) => p.starts_at > nowIso) ?? null;
+    return { channel, current, next: next ? { title: next.title, starts_at: next.starts_at } : null };
+  });
+}
+
 export async function getCurrentProgram(channelId: string) {
   const sb = await db();
   const nowIso = new Date().toISOString();
