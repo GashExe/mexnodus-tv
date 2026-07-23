@@ -2,12 +2,21 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getActor, isStaff } from "@/lib/auth";
 import { hasTmdb } from "@/lib/env";
-import { tmdbPopularMovies, tmdbPopularSeries, toMediaTitleRow } from "@/lib/tmdb";
+import {
+  tmdbPopularMovies,
+  tmdbPopularSeries,
+  tmdbTopRatedMovies,
+  tmdbTopRatedSeries,
+  tmdbPages,
+  toMediaTitleRow,
+} from "@/lib/tmdb";
+
+export const maxDuration = 120;
 
 /**
  * Sincroniza metadatos desde TMDB hacia media_titles (upsert por (kind, tmdb_id)).
  * Solo metadatos: NO crea disponibilidades ni URLs de reproducción.
- * Corre en el servidor con un límite de páginas bajo (apto para Vercel).
+ * Trae varias páginas de populares + mejor valoradas (acotado para Vercel).
  */
 export async function POST() {
   const actor = await getActor();
@@ -19,13 +28,20 @@ export async function POST() {
     );
   }
 
+  const PAGES = 8; // 8 páginas × 20 × 4 listas ≈ 640 títulos por sync
   const supabase = await createClient();
   try {
-    const [movies, series] = await Promise.all([tmdbPopularMovies(1), tmdbPopularSeries(1)]);
-    const rows = [
-      ...movies.map((m) => toMediaTitleRow(m, "movie")),
-      ...series.map((s) => toMediaTitleRow(s, "series")),
-    ];
+    const [popM, topM, popS, topS] = await Promise.all([
+      tmdbPages(tmdbPopularMovies, PAGES),
+      tmdbPages(tmdbTopRatedMovies, PAGES),
+      tmdbPages(tmdbPopularSeries, PAGES),
+      tmdbPages(tmdbTopRatedSeries, PAGES),
+    ]);
+    // dedup por (kind, tmdb_id) antes del upsert
+    const map = new Map<string, ReturnType<typeof toMediaTitleRow>>();
+    for (const m of [...popM, ...topM]) map.set(`movie:${m.id}`, toMediaTitleRow(m, "movie"));
+    for (const s of [...popS, ...topS]) map.set(`series:${s.id}`, toMediaTitleRow(s, "series"));
+    const rows = [...map.values()];
     const { error, count } = await supabase
       .from("media_titles")
       .upsert(rows, { onConflict: "kind,tmdb_id", count: "exact" });

@@ -112,6 +112,26 @@ export const tmdbPopularMovies = (page = 1) =>
 export const tmdbPopularSeries = (page = 1) =>
   tmdb<{ results: TmdbSeries[] }>("/tv/popular", { page: String(page) }).then((r) => r.results);
 
+export const tmdbTopRatedMovies = (page = 1) =>
+  tmdb<{ results: TmdbMovie[] }>("/movie/top_rated", { page: String(page) }).then((r) => r.results);
+
+export const tmdbTopRatedSeries = (page = 1) =>
+  tmdb<{ results: TmdbSeries[] }>("/tv/top_rated", { page: String(page) }).then((r) => r.results);
+
+/** Trae varias páginas de un fetcher de página y las concatena. */
+export async function tmdbPages<T>(
+  fetcher: (page: number) => Promise<T[]>,
+  pages: number,
+): Promise<T[]> {
+  const out: T[] = [];
+  for (let p = 1; p <= pages; p++) {
+    const batch = await fetcher(p).catch(() => [] as T[]);
+    if (!batch.length) break;
+    out.push(...batch);
+  }
+  return out;
+}
+
 export const tmdbMovie = (id: number) =>
   tmdb<TmdbMovie>(`/movie/${id}`, { append_to_response: "credits,external_ids" });
 
