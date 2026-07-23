@@ -1,6 +1,8 @@
 import "server-only";
 import { cache } from "react";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { hasTmdb } from "@/lib/env";
+import { tmdbSearch, toMediaTitleRow } from "@/lib/tmdb";
 import type { Channel, ChannelStream, Episode, MediaTitle, Season } from "@/lib/types/db";
 
 /**
@@ -297,13 +299,60 @@ export async function getContinueWatching(userId: string) {
   return data ?? [];
 }
 
-export async function search(query: string): Promise<MediaTitle[]> {
-  const sb = await db();
+async function searchLocal(sb: Awaited<ReturnType<typeof db>>, query: string): Promise<MediaTitle[]> {
   const { data } = await sb
     .from("media_titles")
     .select("*")
     .ilike("title", `%${query}%`)
     .eq("is_active", true)
-    .limit(30);
+    .order("popularity", { ascending: false })
+    .limit(40);
   return (data as MediaTitle[]) ?? [];
+}
+
+/**
+ * Busca en el catálogo local; si hay pocos resultados y TMDB está configurado,
+ * consulta TMDB en vivo, IMPORTA los títulos encontrados al catálogo (upsert con
+ * el cliente admin) y los devuelve ya como fichas navegables. Así una búsqueda
+ * de algo que no estaba entre lo sembrado lo trae y lo deja disponible.
+ */
+export async function search(query: string): Promise<MediaTitle[]> {
+  const q = query.trim();
+  if (!q) return [];
+  const sb = await db();
+  const local = await searchLocal(sb, q);
+
+  // Suficiente en catálogo, o sin TMDB → no hace falta ir a la red.
+  if (local.length >= 6 || !hasTmdb()) return local;
+
+  try {
+    const { results } = await tmdbSearch(q);
+    const rows = results
+      .filter((r) => (r.media_type === "movie" || r.media_type === "tv") && r.poster_path)
+      .slice(0, 20)
+      .map((r) => toMediaTitleRow(r, r.media_type === "movie" ? "movie" : "series"));
+    if (!rows.length) return local;
+
+    // Upsert con service-role (el catálogo no es escribible por RLS pública) y
+    // recupera las filas YA con su id. No re-consultamos por texto: TMDB guarda
+    // los títulos en español ("Hereditary" → "El legado del diablo") y el texto
+    // buscado no coincidiría.
+    const { data: imported } = await createAdminClient()
+      .from("media_titles")
+      .upsert(rows, { onConflict: "kind,tmdb_id" })
+      .select("*");
+
+    const seen = new Set(local.map((l) => l.id));
+    const merged = [...local];
+    for (const row of (imported as MediaTitle[]) ?? []) {
+      if (!seen.has(row.id)) {
+        seen.add(row.id);
+        merged.push(row);
+      }
+    }
+    merged.sort((a, b) => (b.popularity ?? 0) - (a.popularity ?? 0));
+    return merged;
+  } catch {
+    return local; // ante fallo de TMDB, al menos lo local
+  }
 }
