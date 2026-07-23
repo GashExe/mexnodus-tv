@@ -83,7 +83,7 @@ begin
 
   insert into public.review_decisions (availability_id, decided_by, decision, authorize, notes)
   values (p_availability, v_actor, 'approved',
-          case when p_authorize then 'authorized' else 'unauthorized' end, p_notes);
+          (case when p_authorize then 'authorized' else 'unauthorized' end)::publish_authorization, p_notes);
 
   insert into public.audit_logs (actor_id, action, entity, entity_id, metadata)
   values (v_actor, 'availability.approve', 'media_availabilities', p_availability,
@@ -102,7 +102,7 @@ begin
      set review_status = 'rejected', publish_authorization = 'unauthorized'
    where id = p_availability;
   insert into public.review_decisions (availability_id, decided_by, decision, authorize, notes)
-  values (p_availability, v_actor, 'rejected', 'unauthorized', p_notes);
+  values (p_availability, v_actor, 'rejected', 'unauthorized'::publish_authorization, p_notes);
   insert into public.audit_logs (actor_id, action, entity, entity_id)
   values (v_actor, 'availability.reject', 'media_availabilities', p_availability);
 end $$;
