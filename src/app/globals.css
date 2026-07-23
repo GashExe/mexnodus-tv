@@ -1,0 +1,108 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── MexNodus TV · tokens de diseño ─────────────────────────────────────────
+   Dark-first (obsidiana). Se expone también un tema claro por si el usuario
+   fuerza data-theme="light", pero el producto vive en oscuro. */
+:root {
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Menlo", "Cascadia Mono", monospace;
+
+  /* obsidiana + rosa mexicano + oro cempasúchil */
+  --mx-bg: 10 10 14;          /* #0a0a0e */
+  --mx-surface: 20 19 27;     /* #14131b */
+  --mx-surface-2: 30 28 40;   /* #1e1c28 */
+  --mx-line: 48 45 63;        /* #302d3f */
+  --mx-ink: 240 238 246;      /* #f0eef6 */
+  --mx-ink-2: 168 164 186;    /* #a8a4ba */
+  --mx-ink-3: 116 112 134;    /* #747086 */
+  --mx-accent: 233 30 121;    /* rosa mexicano #e91e79 */
+  --mx-accent-2: 124 58 237;  /* violeta #7c3aed */
+  --mx-gold: 245 178 61;      /* oro cempasúchil #f5b23d */
+  --mx-good: 70 196 106;
+  --mx-warn: 242 176 61;
+  --mx-crit: 255 106 90;
+}
+
+:root[data-theme="light"] {
+  --mx-bg: 245 244 248;
+  --mx-surface: 255 255 255;
+  --mx-surface-2: 238 236 244;
+  --mx-line: 214 210 224;
+  --mx-ink: 20 18 28;
+  --mx-ink-2: 78 74 92;
+  --mx-ink-3: 120 116 134;
+  --mx-accent: 200 20 100;
+  --mx-accent-2: 108 48 210;
+  --mx-gold: 176 106 6;
+}
+
+* { box-sizing: border-box; }
+html { color-scheme: dark; }
+body {
+  background: rgb(var(--mx-bg));
+  color: rgb(var(--mx-ink));
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100dvh;
+}
+
+/* ambiente de fondo: nebulosa sutil de acento (discreta, TV-friendly) */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(60% 50% at 85% -5%, rgb(var(--mx-accent) / 0.10), transparent 60%),
+    radial-gradient(50% 45% at 0% 0%, rgb(var(--mx-accent-2) / 0.08), transparent 55%);
+  pointer-events: none;
+}
+
+/* focus visible fuerte — imprescindible para control remoto y teclado en TV */
+:focus-visible {
+  outline: 3px solid rgb(var(--mx-accent));
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+/* elementos enfocables por D-pad reciben realce extra */
+[data-focusable]:focus-visible {
+  box-shadow: 0 0 0 3px rgb(var(--mx-accent)), 0 0 0 6px rgb(var(--mx-accent) / 0.3);
+  outline: none;
+  transform: scale(1.04);
+}
+
+::-webkit-scrollbar { height: 10px; width: 10px; }
+::-webkit-scrollbar-thumb { background: rgb(var(--mx-line)); border-radius: 999px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}
+
+/* skeleton shimmer */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: rgb(var(--mx-surface-2));
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(var(--mx-ink) / 0.06), transparent);
+  animation: shimmer 1.6s infinite;
+}
+
+/* utilidades tipográficas */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgb(var(--mx-accent));
+}
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
