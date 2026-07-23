@@ -53,17 +53,17 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // CSP estricta. media-src permite HLS autorizado; frame-src bloqueado por
-  // defecto (no embebemos players de terceros en esta versión).
+  // CSP estricta. media-src permite HLS autorizado; frame-src solo el embed de
+  // YouTube (sin cookies) para los tráileres de TMDB.
   const csp = [
     "default-src 'self'",
-    "img-src 'self' https://image.tmdb.org https://*.supabase.co data: blob:",
+    "img-src 'self' https://image.tmdb.org https://*.supabase.co https://i.ytimg.com data: blob:",
     "media-src 'self' https: blob:",
     "connect-src 'self' https://*.supabase.co https://api.themoviedb.org https: wss://*.supabase.co",
     "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self' data:",
-    "frame-src 'none'",
+    "frame-src https://www.youtube-nocookie.com",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",

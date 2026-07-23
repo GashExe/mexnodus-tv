@@ -144,6 +144,57 @@ export const tmdbSeason = (id: number, season: number) =>
 export const tmdbSearch = (query: string) =>
   tmdb<{ results: (TmdbMovie & TmdbSeries & { media_type: string })[] }>("/search/multi", { query });
 
+// ── Extras del detalle: puntuación, tráiler y reparto ───────────────────────
+export interface TmdbCastMember {
+  id: number;
+  name: string;
+  character: string;
+  profile_path: string | null;
+  order: number;
+}
+export interface TmdbVideo {
+  key: string;
+  site: string;
+  type: string;
+  name: string;
+  official?: boolean;
+}
+export interface TitleExtras {
+  voteAverage: number | null;
+  voteCount: number | null;
+  trailerKey: string | null;
+  cast: TmdbCastMember[];
+}
+
+/**
+ * Trae puntuación, tráiler (clave de YouTube) y reparto de un título. Los vídeos
+ * se piden en varios idiomas (incluye null) para no quedarnos sin tráiler cuando
+ * no hay uno en español.
+ */
+export async function tmdbTitleExtras(kind: MediaKind, tmdbId: number): Promise<TitleExtras> {
+  const path = kind === "series" ? `/tv/${tmdbId}` : `/movie/${tmdbId}`;
+  const data = await tmdb<{
+    vote_average?: number;
+    vote_count?: number;
+    credits?: { cast?: TmdbCastMember[] };
+    videos?: { results?: TmdbVideo[] };
+  }>(path, { append_to_response: "credits,videos", include_video_language: "es,en,null" });
+
+  const vids = data.videos?.results ?? [];
+  const yt = (v: TmdbVideo) => v.site === "YouTube";
+  const trailer =
+    vids.find((v) => yt(v) && v.type === "Trailer" && v.official) ??
+    vids.find((v) => yt(v) && v.type === "Trailer") ??
+    vids.find((v) => yt(v) && (v.type === "Teaser" || v.type === "Clip"));
+
+  return {
+    voteAverage: data.vote_average ?? null,
+    voteCount: data.vote_count ?? null,
+    trailerKey: trailer?.key ?? null,
+    cast: (data.credits?.cast ?? []).filter((c) => c.name).slice(0, 14),
+  };
+}
+
 /** Mapea un idioma de TMDB (ISO-639-1) a nuestro LangCode. */
 export function tmdbLangToCode(iso: string): LangCode {
   if (iso === "es") return "es";

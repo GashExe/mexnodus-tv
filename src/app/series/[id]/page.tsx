@@ -1,11 +1,15 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { Play } from "lucide-react";
+import { Play, Star } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { getTitle, getSeasons, getEpisodes, isFavorite } from "@/lib/data";
 import { poster, backdrop } from "@/lib/format";
 import { Chip, Eyebrow, EmptyState } from "@/components/ui";
 import { FavoriteButton } from "@/components/FavoriteButton";
+import { TrailerButton } from "@/components/TrailerButton";
+import { CastRow } from "@/components/CastRow";
+import { tmdbTitleExtras, type TitleExtras } from "@/lib/tmdb";
+import { hasTmdb } from "@/lib/env";
 
 export default async function SeriesDetail({
   params,
@@ -28,6 +32,8 @@ export default async function SeriesDetail({
   const activeSeason = seasons.find((x) => String(x.season_number) === s) ?? seasons[0] ?? null;
   const episodes = activeSeason ? await getEpisodes(activeSeason.id) : [];
   const fav = user ? await isFavorite(user.id, id) : false;
+  const extras: TitleExtras | null =
+    title.tmdb_id && hasTmdb() ? await tmdbTitleExtras("series", title.tmdb_id).catch(() => null) : null;
 
   const bg = backdrop(title.backdrop_path) ?? poster(title.poster_path, "w780");
 
@@ -46,18 +52,29 @@ export default async function SeriesDetail({
       <div>
         <Eyebrow>{title.kind}</Eyebrow>
         <h1 className="text-2xl font-bold tracking-tight sm:text-4xl">{title.title}</h1>
-        <div className="mt-3 flex flex-wrap gap-2">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {extras?.voteAverage ? (
+            <span
+              className="inline-flex items-center gap-1 rounded-pill border border-gold/40 bg-gold/10 px-2.5 py-0.5 text-[13px] font-semibold text-gold"
+              title={extras.voteCount ? `${extras.voteCount.toLocaleString("es-MX")} votos en TMDB` : undefined}
+            >
+              <Star size={13} fill="currentColor" /> {extras.voteAverage.toFixed(1)}
+            </span>
+          ) : null}
           {title.year && <Chip>{title.year}</Chip>}
-          <Chip>{seasons.length} temporada{seasons.length === 1 ? "" : "s"}</Chip>
-          {title.tmdb_id && <Chip>TMDB {title.tmdb_id}</Chip>}
+          {seasons.length > 0 && (
+            <Chip>{seasons.length} temporada{seasons.length === 1 ? "" : "s"}</Chip>
+          )}
+          {title.original_language && <Chip>{title.original_language}</Chip>}
         </div>
         {title.overview && <p className="mt-4 max-w-2xl text-sm text-ink-2 sm:text-base">{title.overview}</p>}
-        {user && (
-          <div className="mt-5">
-            <FavoriteButton titleId={title.id} initial={fav} />
-          </div>
-        )}
+        <div className="mt-5 flex flex-wrap gap-3">
+          {extras?.trailerKey && <TrailerButton youTubeKey={extras.trailerKey} title={title.title} />}
+          {user && <FavoriteButton titleId={title.id} initial={fav} />}
+        </div>
       </div>
+
+      {extras?.cast?.length ? <CastRow cast={extras.cast} /> : null}
 
       {seasons.length === 0 ? (
         <EmptyState title="Esta serie aún no tiene temporadas" hint="Sincroniza temporadas y episodios desde el panel admin (TMDB)." />
