@@ -42,50 +42,12 @@ export function Player({
   const [showInfo, setShowInfo] = useState(false);
   const current = sources[index];
 
-  // ── carga de una fuente concreta con hls.js o reproducción nativa ──────────
-  const load = useCallback(
-    async (i: number) => {
-      const video = videoRef.current;
-      const source = sources[i];
-      if (!video || !source) return;
-      setStatus("switching");
-
-      // limpiar instancia previa
-      if (hlsRef.current) {
-        hlsRef.current.destroy();
-        hlsRef.current = null;
-      }
-
-      const isHls = source.playbackType === "hls" || source.url.includes(".m3u8");
-      const nativeHls = video.canPlayType("application/vnd.apple.mpegurl");
-
-      if (isHls && !nativeHls) {
-        const Hls = (await import("hls.js")).default;
-        if (Hls.isSupported()) {
-          const hls = new Hls({ enableWorker: true, lowLatencyMode: isLive, backBufferLength: 30 });
-          hlsRef.current = hls;
-          hls.loadSource(source.url);
-          hls.attachMedia(video);
-          hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            void video.play().catch(() => {});
-            setStatus("playing");
-          });
-          hls.on(Hls.Events.ERROR, (_e, data) => {
-            if (data.fatal) handleFatal();
-          });
-          return;
-        }
-      }
-      // nativo (Safari/iOS o archivo directo)
-      video.src = source.url;
-      video.play().then(() => setStatus("playing")).catch(() => {});
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sources, isLive],
-  );
+  const advancingRef = useRef(false);
 
   // ── fallback automático a la siguiente fuente aprobada ─────────────────────
   const handleFatal = useCallback(() => {
+    if (advancingRef.current) return; // evita doble avance por errores repetidos
+    advancingRef.current = true;
     setIndex((prev) => {
       const next = prev + 1;
       if (next < sources.length) {
@@ -96,6 +58,51 @@ export function Player({
       return prev;
     });
   }, [sources.length]);
+
+  // ── carga de una fuente: prioriza hls.js; nativo como respaldo ─────────────
+  // Ambas rutas enganchan el error → failover automático a la siguiente fuente.
+  const load = useCallback(
+    async (i: number) => {
+      const video = videoRef.current;
+      const source = sources[i];
+      if (!video || !source) return;
+      setStatus("switching");
+      advancingRef.current = false; // nueva carga: rearma la detección de fallo
+
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+      video.onerror = null;
+      video.onplaying = () => setStatus("playing");
+
+      const isHls = source.playbackType === "hls" || source.url.includes(".m3u8");
+
+      if (isHls) {
+        const Hls = (await import("hls.js")).default;
+        if (Hls.isSupported()) {
+          const hls = new Hls({ enableWorker: true, lowLatencyMode: isLive, backBufferLength: 30 });
+          hlsRef.current = hls;
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            void video.play().catch(() => {});
+            setStatus("playing");
+          });
+          hls.on(Hls.Events.ERROR, (_e, data) => {
+            if (data.fatal) handleFatal();
+          });
+          hls.loadSource(source.url);
+          hls.attachMedia(video);
+          return;
+        }
+      }
+      // nativo (Safari/iOS o archivo directo): el error del <video> dispara el failover
+      video.src = source.url;
+      video.onerror = () => handleFatal();
+      video.play().then(() => setStatus("playing")).catch(() => {});
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sources, isLive],
+  );
 
   useEffect(() => {
     void load(index);
