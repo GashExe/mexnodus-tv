@@ -14,18 +14,15 @@ import {
   Radio,
   Settings2,
   Check,
-  ShieldCheck,
-  ExternalLink,
 } from "lucide-react";
 import {
-  DEFAULT_EMBED_SANDBOX,
   EMBED_ALLOW,
+  EMBED_REFERRER_POLICY,
   EMBED_PROBE_TIMEOUT_MS,
   EMBED_LOAD_TIMEOUT_MS,
   SHIELD_EVENT_SOURCE,
   isCriticalEmbedEvent,
   type EmbedEventKind,
-  type EmbedSecurityLevel,
 } from "@/lib/security/embed-shield";
 
 export interface PlayerSource {
@@ -37,15 +34,6 @@ export interface PlayerSource {
   score?: number;
   resolutionHeight?: number | null;
   audioLanguages?: string[];
-  // ── Secure Embed Shield (solo fuentes `embed`) ──
-  /** Valor final del atributo `sandbox` (generado por el escudo). */
-  sandbox?: string;
-  /** Valor del atributo `allow`. */
-  allow?: string;
-  /** Nivel de seguridad efectivo del proveedor. */
-  securityLevel?: EmbedSecurityLevel;
-  /** true = no se enmarca; se ofrece apertura externa (proveedor incompatible). */
-  externalOnly?: boolean;
 }
 
 export interface PlayerProps {
@@ -139,14 +127,6 @@ export function Player({
         setLevel(-1);
         setAutoHeight(null);
         advancingRef.current = false;
-
-        // Proveedor incompatible con el sandbox (exige popups/navegación superior):
-        // NO se enmarca. Se muestra una tarjeta de apertura externa; no hay sonda.
-        if (source.externalOnly) {
-          setStatus("playing");
-          return;
-        }
-
         setStatus("switching");
 
         // Sonda de alcanzabilidad (cross-origin, no-cors): es un DIAGNÓSTICO NO
@@ -264,10 +244,11 @@ export function Player({
       const kind = d.kind;
 
       if (kind === "popup_blocked") {
-        // ÉXITO del escudo: el iframe intentó abrir una ventana emergente y el
-        // sandbox (sin allow-popups) lo impidió. Se cuenta, no se degrada nada.
+        // Un popup bloqueado (por el host NATIVO en Electron/Android/iOS, o por el
+        // bloqueador del navegador) es benigno: se cuenta y registra, NUNCA degrada
+        // el estado ni dispara failover. En la web NO usamos sandbox (ver iframe).
         setBlockedPopups((n) => n + 1);
-        console.info("[embed] popup_blocked (no crítico): el escudo bloqueó una ventana emergente.");
+        console.info("[embed] popup_blocked (no crítico): una ventana emergente fue bloqueada.");
         return;
       }
       if (kind === "playback_started" || kind === "iframe_loaded") {
@@ -451,28 +432,24 @@ export function Player({
         onMouseMove={isLive ? wakeControls : undefined}
         onMouseLeave={isLive ? () => setControlsVisible(false) : undefined}
       >
-        {/* Fuentes `embed`: iframe del proveedor bajo el Secure Embed Shield.
-            Un proveedor incompatible (external-only) no se enmarca: se ofrece
-            apertura externa. El resto usa <video>/hls.js. */}
+        {/* Fuentes `embed`: iframe del proveedor. El resto usa <video>/hls.js.
+            ⚠️ SIN atributo `sandbox` A PROPÓSITO (versión web): múltiples
+            proveedores de embed DETECTAN el atributo `sandbox` y RECHAZAN la
+            reproducción («Please disable sandbox»). Se prioriza la compatibilidad
+            de reproducción; el bloqueo de popups se hará en las apps nativas
+            (Electron/Android/iOS) vía el host/WebView. No se evade la detección:
+            simplemente no se usa sandbox. Ver src/lib/security/embed-shield.ts. */}
         {isEmbed ? (
-          current.externalOnly ? (
-            <ExternalEmbed url={current.url} />
-          ) : (
-            <iframe
-              key={current.url}
-              src={current.url}
-              title={`Reproduciendo ${title}`}
-              className="h-full w-full border-0"
-              // Secure Embed Shield: sandbox por perfil (nunca popups/top-nav/downloads),
-              // allow acotado y referrer oculto. Fallback = perfil compatible
-              // (conserva el origen del embed y evita el error «Origin null» de CORS).
-              sandbox={current.sandbox ?? DEFAULT_EMBED_SANDBOX}
-              allow={current.allow ?? EMBED_ALLOW}
-              allowFullScreen
-              referrerPolicy="no-referrer"
-              onLoad={() => window.clearTimeout(embedWatchdogRef.current)}
-            />
-          )
+          <iframe
+            key={current.url}
+            src={current.url}
+            title={`Reproduciendo ${title}`}
+            className="h-full w-full border-0"
+            allow={EMBED_ALLOW}
+            allowFullScreen
+            referrerPolicy={EMBED_REFERRER_POLICY}
+            onLoad={() => window.clearTimeout(embedWatchdogRef.current)}
+          />
         ) : (
           /* En vivo NO lleva controles nativos: sin línea de tiempo; barra propia */
           <video
@@ -675,9 +652,9 @@ export function Player({
           <div>tipo: {current.playbackType} · resolución declarada: {current.resolutionHeight ?? "—"}p</div>
           <div>audio: {current.audioLanguages?.join(", ") || "—"}</div>
           {isEmbed && (
-            <div className="text-good">
-              popups bloqueados por el escudo: {blockedPopups}
-              {blockedPopups > 0 ? " (comportamiento esperado, sin efecto en la reproducción)" : ""}
+            <div className="text-ink-3">
+              popups bloqueados (reportados): {blockedPopups}
+              {" · web sin sandbox — mitigación en app nativa"}
             </div>
           )}
           {current.score != null && <div>puntuación del engine: {current.score}</div>}
@@ -695,45 +672,6 @@ export function Player({
           <div className="mt-1 break-all text-ink-3">url: {current.url}</div>
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * Proveedor marcado como `external-only`: exige capacidades que el escudo NUNCA
- * concede (popups / navegación superior), así que no se enmarca. Se abre en una
- * pestaña nueva SOLO por acción del usuario (no es un popup automático), con
- * `rel="noopener noreferrer"` para que el sitio destino no controle esta ventana
- * ni reciba el referer.
- */
-function ExternalEmbed({ url }: { url: string }) {
-  let host = url;
-  try {
-    host = new URL(url).host;
-  } catch {
-    /* deja la url tal cual si no parsea */
-  }
-  return (
-    <div className="grid h-full w-full place-items-center bg-black p-6 text-center">
-      <div className="max-w-sm">
-        <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full bg-accent/15 text-accent">
-          <ShieldCheck size={22} />
-        </div>
-        <p className="font-medium text-white">Este proveedor se abre fuera del reproductor</p>
-        <p className="mt-1.5 text-sm text-ink-2">
-          Por seguridad no se incrusta: requiere permisos (ventanas emergentes o
-          navegación) que el escudo no concede.
-        </p>
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          data-focusable
-          className="mt-4 inline-flex items-center gap-2 rounded-pill bg-accent px-5 py-2.5 text-sm font-semibold text-white transition hover:brightness-110"
-        >
-          <ExternalLink size={15} /> Abrir en {host}
-        </a>
-      </div>
     </div>
   );
 }

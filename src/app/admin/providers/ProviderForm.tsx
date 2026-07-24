@@ -42,16 +42,9 @@ export function ProviderForm() {
         </label>
       </fieldset>
 
-      {/* Secure Embed Shield: perfil de seguridad del embed. */}
+      {/* Riesgo del proveedor: SOLO analítica (no afecta el render del iframe). */}
       <fieldset className="grid gap-3 rounded-[10px] border border-line/60 bg-bg/40 p-3 sm:col-span-2 sm:grid-cols-2">
-        <legend className="px-1 text-xs text-ink-3">Secure Embed Shield (seguridad del iframe)</legend>
-        <label className="text-sm">Nivel de seguridad
-          <select name="embed_security_level" className={field} defaultValue="compatible">
-            <option value="compatible">compatible · allow-scripts allow-same-origin</option>
-            <option value="strict">strict · allow-scripts</option>
-            <option value="external-only">external-only · no se enmarca</option>
-          </select>
-        </label>
+        <legend className="px-1 text-xs text-ink-3">Riesgo del embed (analítica)</legend>
         <label className="text-sm">Riesgo de popup
           <select name="popup_risk" className={field} defaultValue="medium">
             {["low", "medium", "high"].map((t) => <option key={t}>{t}</option>)}
@@ -62,18 +55,11 @@ export function ProviderForm() {
             {["low", "medium", "high"].map((t) => <option key={t}>{t}</option>)}
           </select>
         </label>
-        <div className="flex flex-col justify-end gap-2 text-sm">
-          <label className="flex items-center gap-2">
-            <input type="checkbox" name="requires_same_origin" className="accent-accent" /> Requiere same-origin
-          </label>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" name="sandbox_compatible" defaultChecked className="accent-accent" /> Compatible con sandbox
-          </label>
-        </div>
         <p className="text-xs text-ink-3 sm:col-span-2">
-          Nunca se conceden <code>allow-popups</code>, <code>allow-top-navigation</code> ni{" "}
-          <code>allow-downloads</code>. Un proveedor con riesgo alto de popup/redirección se marca
-          incompatible y se ofrece solo como apertura externa.
+          En la <strong>versión web</strong> los embeds se renderizan <strong>sin <code>sandbox</code></strong>{" "}
+          (varios proveedores lo detectan y bloquean la reproducción). Estos riesgos son solo
+          informativos: alimentan el panel y la futura política de bloqueo de popups en las apps
+          nativas (Electron/Android/iOS).
         </p>
       </fieldset>
 

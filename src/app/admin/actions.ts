@@ -27,12 +27,9 @@ const providerSchema = z.object({
   movie_pattern: z.string().optional().or(z.literal("")),
   series_pattern: z.string().optional().or(z.literal("")),
   playback_type: z.enum(["hls", "dash", "file", "embed", "jellyfin", "iptv"]).optional(),
-  // Secure Embed Shield (solo relevante para embeds).
-  embed_security_level: z.enum(["strict", "compatible", "external-only"]).optional(),
-  requires_same_origin: z.coerce.boolean().optional(),
+  // Riesgo del proveedor (SOLO analítica; no afecta el render del iframe en web).
   popup_risk: z.enum(["low", "medium", "high"]).optional(),
   redirect_risk: z.enum(["low", "medium", "high"]).optional(),
-  sandbox_compatible: z.coerce.boolean().optional(),
 });
 
 export async function createProvider(_prev: unknown, formData: FormData) {
@@ -41,30 +38,20 @@ export async function createProvider(_prev: unknown, formData: FormData) {
   const parsed = providerSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
 
-  const {
-    movie_pattern,
-    series_pattern,
-    playback_type,
-    embed_security_level,
-    requires_same_origin,
-    popup_risk,
-    redirect_risk,
-    sandbox_compatible,
-    ...providerCols
-  } = parsed.data;
+  const { movie_pattern, series_pattern, playback_type, popup_risk, redirect_risk, ...providerCols } =
+    parsed.data;
   const public_config =
     providerCols.adapter === "pattern-embed"
       ? {
           ...(movie_pattern ? { movie_pattern } : {}),
           ...(series_pattern ? { series_pattern } : {}),
           playback_type: playback_type ?? "embed",
-          // Secure Embed Shield: config de seguridad del proveedor de embed.
+          // Metadatos de riesgo del proveedor: SOLO analítica (panel admin + futura
+          // política de bloqueo en app nativa). En web NO afectan el render del
+          // iframe — los embeds se renderizan sin `sandbox` a propósito.
           security: {
-            embed_security_level: embed_security_level ?? "compatible",
-            requires_same_origin: requires_same_origin ?? false,
             popup_risk: popup_risk ?? "medium",
             redirect_risk: redirect_risk ?? "medium",
-            sandbox_compatible: sandbox_compatible ?? true,
             last_security_test_at: null,
           },
         }
@@ -222,16 +209,16 @@ export async function mockValidate(id: string) {
   return { ok: true };
 }
 
-// ── Prueba de seguridad del proveedor (Secure Embed Shield) ──
+// ── Registro de riesgo del proveedor (analítica; sin efecto en el render web) ──
 /**
- * Evalúa la config de seguridad declarada de un proveedor de embed: deriva si es
- * `sandbox_compatible`, lo degrada a solo-externo cuando exige popups/navegación,
- * y sella `last_security_test_at`. Es una comprobación estática (sin red): valida
- * que el sandbox generado nunca conceda capacidades abusivas.
+ * Evalúa los metadatos de riesgo (popup_risk/redirect_risk) y sella
+ * `last_security_test_at`. SOLO informativo: en web los embeds se renderizan sin
+ * `sandbox`, así que esto NO cambia cómo se enmarca nada — alimenta el panel y la
+ * futura política de bloqueo en app nativa.
  */
 export async function runProviderSecurityTest(id: string) {
   const actor = await requireStaff();
-  if (actor.role !== "admin") return { error: "Solo un admin puede probar proveedores" };
+  if (actor.role !== "admin") return { error: "Solo un admin puede evaluar proveedores" };
   const supabase = await createClient();
 
   const { data, error } = await supabase
@@ -247,12 +234,7 @@ export async function runProviderSecurityTest(id: string) {
 
   const nextConfig = {
     ...config,
-    security: {
-      ...security,
-      sandbox_compatible: assessment.sandboxCompatible,
-      embed_security_level: assessment.recommendedLevel,
-      last_security_test_at: new Date().toISOString(),
-    },
+    security: { ...security, last_security_test_at: new Date().toISOString() },
   };
 
   const { error: upErr } = await supabase
@@ -266,7 +248,7 @@ export async function runProviderSecurityTest(id: string) {
     action: "provider.security_test",
     entity: "providers",
     entity_id: id,
-    metadata: { level: assessment.recommendedLevel, sandbox_compatible: assessment.sandboxCompatible },
+    metadata: { needs_native_mitigation: assessment.needsNativeMitigation },
   });
   revalidatePath("/admin/providers");
   return { ok: true, warnings: assessment.warnings };

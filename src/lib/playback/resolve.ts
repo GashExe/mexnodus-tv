@@ -4,7 +4,6 @@ import { selectPlayback, trustToScore, type Candidate, type SelectionResult } fr
 import { DEFAULT_WEIGHTS } from "./weights";
 import { DEFAULT_AUDIO_PRIORITY, DEFAULT_SUBTITLE_PRIORITY } from "@/lib/language";
 import { getAdapter, type AdapterContext } from "@/lib/providers/registry";
-import { planFromConfig, type SandboxPlan } from "@/lib/security/embed-shield";
 import type { LangCode, UserPreferences } from "@/lib/types/db";
 
 /** Adaptadores dinámicos: sintetizan la URL al vuelo, sin fila por título. */
@@ -104,12 +103,9 @@ async function loadTmdbContext(
  * TMDB). No hay fila en `media_availabilities`: la autorización es a nivel de
  * proveedor (primera parte, `is_active` + `trust_level`).
  */
-async function synthesizeDynamicCandidates(
-  sb: Supabase,
-  target: Target,
-): Promise<{ candidates: Candidate[]; security: Record<string, SandboxPlan> }> {
+async function synthesizeDynamicCandidates(sb: Supabase, target: Target): Promise<Candidate[]> {
   const ctx = await loadTmdbContext(sb, target);
-  if (!ctx) return { candidates: [], security: {} };
+  if (!ctx) return [];
 
   const { data: providers } = await sb
     .from("providers")
@@ -118,7 +114,6 @@ async function synthesizeDynamicCandidates(
     .in("adapter", DYNAMIC_ADAPTERS);
 
   const out: Candidate[] = [];
-  const security: Record<string, SandboxPlan> = {};
   for (const p of (providers ?? []) as {
     id: string;
     adapter: string;
@@ -129,13 +124,9 @@ async function synthesizeDynamicCandidates(
     const adapter = getAdapter(p.adapter);
     if (!adapter) continue;
     const sources = adapter.resolve({ ...ctx, publicConfig: p.public_config ?? {} });
-    // Plan de sandbox del proveedor (aplica a todas sus fuentes embed).
-    const plan = planFromConfig(p.public_config);
     sources.forEach((s, i) => {
-      const id = `dyn:${p.id}:${target.id}:${i}`;
-      if (s.playbackType === "embed") security[id] = plan;
       out.push({
-        id,
+        id: `dyn:${p.id}:${target.id}:${i}`,
         provider_id: p.id,
         playback_type: s.playbackType,
         play_url: s.url,
@@ -153,22 +144,20 @@ async function synthesizeDynamicCandidates(
         review_status: "approved",
         publish_authorization: "authorized",
         region_restrictions: null,
-        // Un embed incompatible (solo-externo) no debe ganar la selección: se
-        // hunde su prioridad para que el motor pruebe antes una fuente enmarcable.
-        priority: (p.priority ?? 0) - (s.playbackType === "embed" && plan.incompatible ? 1000 : 0),
+        priority: p.priority ?? 0,
         audio_languages: (s.audioLanguages as LangCode[]) ?? [],
         subtitle_languages: (s.subtitleLanguages as LangCode[]) ?? [],
         provider_trust: trustToScore(p.trust_level),
       });
     });
   }
-  return { candidates: out, security };
+  return out;
 }
 
 export async function resolvePlayback(
   target: Target,
   userId: string | null,
-): Promise<{ result: SelectionResult; country: string; security: Record<string, SandboxPlan> }> {
+): Promise<{ result: SelectionResult; country: string }> {
   const sb = await createClient();
 
   const col =
@@ -176,22 +165,13 @@ export async function resolvePlayback(
 
   const { data: rows } = await sb
     .from("media_availabilities")
-    .select("*, providers(trust_level, public_config)")
+    .select("*, providers(trust_level)")
     .eq(col, target.id)
     .eq("is_active", true);
 
   const stored = (rows ?? []).map(toCandidate);
-  // Plan de sandbox de las disponibilidades embed guardadas.
-  const security: Record<string, SandboxPlan> = {};
-  for (const row of (rows ?? []) as Record<string, unknown>[]) {
-    if (row.playback_type === "embed") {
-      const cfg = (row.providers as { public_config?: Record<string, unknown> | null })?.public_config ?? null;
-      security[row.id as string] = planFromConfig(cfg);
-    }
-  }
   const dynamic = await synthesizeDynamicCandidates(sb, target);
-  Object.assign(security, dynamic.security);
-  const candidates = [...stored, ...dynamic.candidates];
+  const candidates = [...stored, ...dynamic];
 
   const prefs = await loadPreferences(userId);
   const country = "MX";
@@ -206,5 +186,5 @@ export async function resolvePlayback(
     weights: DEFAULT_WEIGHTS,
   });
 
-  return { result, country, security };
+  return { result, country };
 }
