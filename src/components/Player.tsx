@@ -55,6 +55,7 @@ export function Player({
   const [status, setStatus] = useState<Status>("loading");
   const [showInfo, setShowInfo] = useState(false);
   const current = sources[index];
+  const isEmbed = current?.playbackType === "embed";
 
   // ── controles propios para EN VIVO (sin línea de tiempo) ──────────────────
   const [playing, setPlaying] = useState(false);
@@ -70,6 +71,9 @@ export function Player({
   const [showQuality, setShowQuality] = useState(false);
 
   const advancingRef = useRef(false);
+  // ── failover de fuentes `embed` (iframe cross-origin) ─────────────────────
+  const probeCtrlRef = useRef<AbortController | null>(null);
+  const embedWatchdogRef = useRef<number | undefined>(undefined);
 
   // ── fallback automático a la siguiente fuente aprobada ─────────────────────
   const handleFatal = useCallback(() => {
@@ -90,9 +94,52 @@ export function Player({
   // Ambas rutas enganchan el error → failover automático a la siguiente fuente.
   const load = useCallback(
     async (i: number) => {
-      const video = videoRef.current;
       const source = sources[i];
-      if (!video || !source) return;
+      if (!source) return;
+
+      // cancela cualquier sonda/watchdog de un embed anterior
+      probeCtrlRef.current?.abort();
+      probeCtrlRef.current = null;
+      window.clearTimeout(embedWatchdogRef.current);
+
+      // Fuentes `embed`: se transmiten dentro de un <iframe> (contenido servido
+      // por el proveedor). No pasan por hls.js/<video> ni por métricas locales;
+      // el navegador las gestiona de forma aislada (cross-origin).
+      if (source.playbackType === "embed") {
+        if (hlsRef.current) {
+          hlsRef.current.destroy();
+          hlsRef.current = null;
+        }
+        setLevels([]);
+        setLevel(-1);
+        setAutoHeight(null);
+        advancingRef.current = false;
+        setStatus("switching");
+
+        // Sonda de alcanzabilidad: no podemos ver dentro del iframe (cross-origin),
+        // pero sí comprobar que el servidor RESPONDE. Si está caído/inalcanzable,
+        // la petición falla o expira → saltamos a la siguiente señal.
+        const ctrl = new AbortController();
+        probeCtrlRef.current = ctrl;
+        const timer = window.setTimeout(() => ctrl.abort(), 7000);
+        try {
+          await fetch(source.url, { mode: "no-cors", signal: ctrl.signal });
+          window.clearTimeout(timer);
+          if (probeCtrlRef.current !== ctrl) return; // otra carga tomó el control
+          setStatus("playing"); // el iframe (render por JSX) muestra el reproductor
+          // Watchdog: si el iframe no dispara `onLoad` en 12s (servidor colgado o
+          // framing bloqueado por X-Frame-Options), salta a la siguiente señal.
+          embedWatchdogRef.current = window.setTimeout(() => handleFatal(), 12000);
+        } catch {
+          window.clearTimeout(timer);
+          if (probeCtrlRef.current !== ctrl) return;
+          handleFatal(); // servidor caído/inalcanzable → siguiente señal
+        }
+        return;
+      }
+
+      const video = videoRef.current;
+      if (!video) return;
       setStatus("switching");
       advancingRef.current = false; // nueva carga: rearma la detección de fallo
 
@@ -155,6 +202,8 @@ export function Player({
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
+      probeCtrlRef.current?.abort();
+      window.clearTimeout(embedWatchdogRef.current);
     };
   }, [index, load]);
 
@@ -301,15 +350,29 @@ export function Player({
         onMouseMove={isLive ? wakeControls : undefined}
         onMouseLeave={isLive ? () => setControlsVisible(false) : undefined}
       >
-        {/* En vivo NO lleva controles nativos: sin línea de tiempo; barra propia */}
-        <video
-          ref={videoRef}
-          controls={!isLive}
-          playsInline
-          className="h-full w-full"
-          aria-label={`Reproduciendo ${title}`}
-          onClick={isLive ? () => { togglePlay(); wakeControls(); } : undefined}
-        />
+        {/* Fuentes `embed`: iframe del proveedor. El resto usa <video>/hls.js. */}
+        {isEmbed ? (
+          <iframe
+            key={current.url}
+            src={current.url}
+            title={`Reproduciendo ${title}`}
+            className="h-full w-full border-0"
+            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+            allowFullScreen
+            referrerPolicy="no-referrer"
+            onLoad={() => window.clearTimeout(embedWatchdogRef.current)}
+          />
+        ) : (
+          /* En vivo NO lleva controles nativos: sin línea de tiempo; barra propia */
+          <video
+            ref={videoRef}
+            controls={!isLive}
+            playsInline
+            className="h-full w-full"
+            aria-label={`Reproduciendo ${title}`}
+            onClick={isLive ? () => { togglePlay(); wakeControls(); } : undefined}
+          />
+        )}
 
         {/* insignia EN VIVO dentro del vídeo (no bloquea los controles) */}
         {isLive && status === "playing" && (

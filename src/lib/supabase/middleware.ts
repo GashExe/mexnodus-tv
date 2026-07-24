@@ -53,8 +53,10 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // CSP estricta. media-src permite HLS autorizado; frame-src solo el embed de
-  // YouTube (sin cookies) para los tráileres de TMDB.
+  // CSP estricta. media-src permite HLS autorizado; frame-src permite el embed de
+  // YouTube (tráilers TMDB) y los dominios de primera parte que sirven el
+  // reproductor `embed`. Al añadir un servidor `pattern-embed` con un dominio
+  // nuevo, incluir aquí su origen o el iframe será bloqueado por CSP.
   const csp = [
     "default-src 'self'",
     "img-src 'self' https://image.tmdb.org https://*.supabase.co https://i.ytimg.com data: blob:",
@@ -63,7 +65,7 @@ export async function updateSession(request: NextRequest) {
     "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self' data:",
-    "frame-src https://www.youtube-nocookie.com",
+    "frame-src https://www.youtube-nocookie.com https://www.mexnodus.com https://mexnodus.com",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",

@@ -151,6 +151,42 @@ registerAdapter({
   },
 });
 
+/**
+ * Proveedor de primera parte basado en plantilla, con patrones separados para
+ * película y serie, y tipo de reproducción configurable (por defecto `embed`).
+ *
+ * Pensado para servir contenido propio desde un dominio propio a partir del
+ * `tmdb_id`, p.ej. `https://www.mexnodus.com/movie/{tmdb}` y
+ * `https://www.mexnodus.com/tv/{tmdb}/{season}/{episode}`. Es dinámico: no
+ * necesita una fila por título; la URL se construye al vuelo en la resolución.
+ */
+registerAdapter({
+  slug: "pattern-embed",
+  label: "Patrón por TMDB (embed)",
+  providerType: "official",
+  capabilities: { movies: true, series: true, embed: true },
+  resolve(ctx) {
+    const moviePattern = ctx.publicConfig.movie_pattern as string | undefined;
+    const seriesPattern = ctx.publicConfig.series_pattern as string | undefined;
+    const playbackType = (ctx.publicConfig.playback_type as PlaybackType | undefined) ?? "embed";
+    const tmdb = ctx.externalIds.tmdb_id;
+    if (!tmdb) return [];
+
+    const isSeries = ctx.kind === "series" || ctx.kind === "episode";
+    const pattern = isSeries ? seriesPattern : moviePattern;
+    if (!pattern) return [];
+    // Serie sin temporada/episodio no es reproducible con este patrón.
+    if (isSeries && (ctx.season == null || ctx.episode == null)) return [];
+
+    const url = template(pattern, {
+      tmdb,
+      season: ctx.season ?? "",
+      episode: ctx.episode ?? "",
+    });
+    return [{ playbackType, url }];
+  },
+});
+
 /** Proveedor FAST/genérico basado en un patrón de URL declarado en la config. */
 registerAdapter({
   slug: "fast-pattern",

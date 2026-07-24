@@ -83,6 +83,24 @@ export async function getEpisodes(seasonId: string): Promise<Episode[]> {
   return (data as Episode[]) ?? [];
 }
 
+export async function getEpisode(id: string): Promise<Episode | null> {
+  const sb = await db();
+  const { data } = await sb.from("episodes").select("*").eq("id", id).maybeSingle();
+  return (data as Episode) ?? null;
+}
+
+/** Todos los episodios de una serie, ordenados por temporada y número. */
+export async function getSeriesEpisodes(seriesId: string): Promise<Episode[]> {
+  const sb = await db();
+  const { data } = await sb
+    .from("episodes")
+    .select("*")
+    .eq("series_id", seriesId)
+    .order("season_number")
+    .order("episode_number");
+  return (data as Episode[]) ?? [];
+}
+
 export interface ChannelQuery {
   kind?: Channel["kind"];
   country?: string;

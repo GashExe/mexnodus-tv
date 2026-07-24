@@ -6,7 +6,8 @@ import { resolvePlayback } from "@/lib/playback/resolve";
 import { Player, type PlayerSource } from "@/components/Player";
 import { AvailabilityPanel } from "@/components/AvailabilityPanel";
 import { LANG_LABEL } from "@/lib/language";
-import { getChannel, getPlayableChannelStreams, getCurrentProgram, getRelatedChannels } from "@/lib/data";
+import { getChannel, getPlayableChannelStreams, getCurrentProgram, getRelatedChannels, getEpisode, getSeriesEpisodes, getTitle } from "@/lib/data";
+import { EpisodeNav } from "@/components/EpisodeNav";
 import { poster } from "@/lib/format";
 import { flagEmoji, countryName } from "@/lib/geo";
 import { Chip, SectionTitle } from "@/components/ui";
@@ -165,10 +166,39 @@ export default async function WatchPage({ params }: { params: Promise<{ type: st
 
   const progressKey = kind === "episode" ? { episode_id: id } : { media_title_id: id };
 
+  // ── Contexto de serie (navegación de episodios) ──
+  let playerTitle = "Reproducción";
+  let episodeNav: { seriesTitle: string; episodes: import("@/components/EpisodeNav").EpisodeNavItem[] } | null = null;
+  if (kind === "episode") {
+    const ep = await getEpisode(id);
+    if (ep) {
+      const [series, allEpisodes] = await Promise.all([
+        getTitle(ep.series_id),
+        getSeriesEpisodes(ep.series_id),
+      ]);
+      const seriesTitle = series?.title ?? "Serie";
+      playerTitle = `${seriesTitle} · T${ep.season_number} E${ep.episode_number}${ep.title ? ` — ${ep.title}` : ""}`;
+      episodeNav = {
+        seriesTitle,
+        episodes: allEpisodes.map((e) => ({
+          id: e.id,
+          season_number: e.season_number,
+          episode_number: e.episode_number,
+          title: e.title,
+          air_date: e.air_date,
+          runtime_minutes: e.runtime_minutes,
+        })),
+      };
+    }
+  }
+
   return (
     <div className="space-y-5">
       <BackLink href={kind === "episode" ? "/series" : "/movies"} label="Catálogo" />
-      <Player sources={sources} title="Reproducción" progressKey={progressKey} initialPosition={initial} />
+      <Player sources={sources} title={playerTitle} progressKey={progressKey} initialPosition={initial} />
+      {episodeNav && episodeNav.episodes.length > 0 && (
+        <EpisodeNav seriesTitle={episodeNav.seriesTitle} episodes={episodeNav.episodes} currentId={id} />
+      )}
       <div className="max-w-2xl">
         <AvailabilityPanel result={result} />
       </div>

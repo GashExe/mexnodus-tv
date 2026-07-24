@@ -3,7 +3,11 @@ import { createClient } from "@/lib/supabase/server";
 import { selectPlayback, trustToScore, type Candidate, type SelectionResult } from "./engine";
 import { DEFAULT_WEIGHTS } from "./weights";
 import { DEFAULT_AUDIO_PRIORITY, DEFAULT_SUBTITLE_PRIORITY } from "@/lib/language";
+import { getAdapter, type AdapterContext } from "@/lib/providers/registry";
 import type { LangCode, UserPreferences } from "@/lib/types/db";
+
+/** Adaptadores dinámicos: sintetizan la URL al vuelo, sin fila por título. */
+const DYNAMIC_ADAPTERS = ["pattern-embed"];
 
 /**
  * Carga las disponibilidades de un contenido y ejecuta el Playback Selection
@@ -52,6 +56,104 @@ function toCandidate(row: Record<string, unknown>): Candidate {
   };
 }
 
+type Supabase = Awaited<ReturnType<typeof createClient>>;
+
+/** Contexto TMDB (id + temporada/episodio) del objetivo, para los adaptadores. */
+async function loadTmdbContext(
+  sb: Supabase,
+  target: Target,
+): Promise<Pick<AdapterContext, "externalIds" | "kind" | "season" | "episode"> | null> {
+  if (target.kind === "title") {
+    const { data } = await sb
+      .from("media_titles")
+      .select("tmdb_id, kind")
+      .eq("id", target.id)
+      .maybeSingle();
+    const t = data as { tmdb_id: number | null; kind: string } | null;
+    if (!t?.tmdb_id) return null;
+    return { externalIds: { tmdb_id: t.tmdb_id }, kind: t.kind === "series" ? "series" : "movie" };
+  }
+  if (target.kind === "episode") {
+    const { data } = await sb
+      .from("episodes")
+      .select("season_number, episode_number, series_id")
+      .eq("id", target.id)
+      .maybeSingle();
+    const ep = data as { season_number: number; episode_number: number; series_id: string } | null;
+    if (!ep) return null;
+    const { data: series } = await sb
+      .from("media_titles")
+      .select("tmdb_id")
+      .eq("id", ep.series_id)
+      .maybeSingle();
+    const tmdb = (series as { tmdb_id: number | null } | null)?.tmdb_id;
+    if (!tmdb) return null;
+    return {
+      externalIds: { tmdb_id: tmdb },
+      kind: "episode",
+      season: ep.season_number,
+      episode: ep.episode_number,
+    };
+  }
+  return null; // canales/eventos no usan patrón TMDB
+}
+
+/**
+ * Sintetiza candidatos al vuelo desde los proveedores dinámicos (patrón por
+ * TMDB). No hay fila en `media_availabilities`: la autorización es a nivel de
+ * proveedor (primera parte, `is_active` + `trust_level`).
+ */
+async function synthesizeDynamicCandidates(sb: Supabase, target: Target): Promise<Candidate[]> {
+  const ctx = await loadTmdbContext(sb, target);
+  if (!ctx) return [];
+
+  const { data: providers } = await sb
+    .from("providers")
+    .select("id, adapter, public_config, trust_level, priority")
+    .eq("is_active", true)
+    .in("adapter", DYNAMIC_ADAPTERS);
+
+  const out: Candidate[] = [];
+  for (const p of (providers ?? []) as {
+    id: string;
+    adapter: string;
+    public_config: Record<string, unknown> | null;
+    trust_level: string;
+    priority: number | null;
+  }[]) {
+    const adapter = getAdapter(p.adapter);
+    if (!adapter) continue;
+    const sources = adapter.resolve({ ...ctx, publicConfig: p.public_config ?? {} });
+    sources.forEach((s, i) => {
+      out.push({
+        id: `dyn:${p.id}:${target.id}:${i}`,
+        provider_id: p.id,
+        playback_type: s.playbackType,
+        play_url: s.url,
+        resolution_height: null,
+        bitrate_kbps: null,
+        fps: null,
+        video_codec: null,
+        hdr: false,
+        dolby_vision: false,
+        audio_51: false,
+        startup_ms: null,
+        stability: null,
+        uptime_pct: null,
+        last_checked_at: null,
+        review_status: "approved",
+        publish_authorization: "authorized",
+        region_restrictions: null,
+        priority: p.priority ?? 0,
+        audio_languages: (s.audioLanguages as LangCode[]) ?? [],
+        subtitle_languages: (s.subtitleLanguages as LangCode[]) ?? [],
+        provider_trust: trustToScore(p.trust_level),
+      });
+    });
+  }
+  return out;
+}
+
 export async function resolvePlayback(
   target: Target,
   userId: string | null,
@@ -67,7 +169,9 @@ export async function resolvePlayback(
     .eq(col, target.id)
     .eq("is_active", true);
 
-  const candidates = (rows ?? []).map(toCandidate);
+  const stored = (rows ?? []).map(toCandidate);
+  const dynamic = await synthesizeDynamicCandidates(sb, target);
+  const candidates = [...stored, ...dynamic];
 
   const prefs = await loadPreferences(userId);
   const country = "MX";

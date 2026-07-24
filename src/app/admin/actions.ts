@@ -21,6 +21,10 @@ const providerSchema = z.object({
   domain: z.string().optional(),
   trust_level: z.enum(["untrusted", "low", "medium", "high", "verified"]),
   priority: z.coerce.number().int(),
+  // Config del adaptador `pattern-embed` (opcional para el resto).
+  movie_pattern: z.string().optional().or(z.literal("")),
+  series_pattern: z.string().optional().or(z.literal("")),
+  playback_type: z.enum(["hls", "dash", "file", "embed", "jellyfin", "iptv"]).optional(),
 });
 
 export async function createProvider(_prev: unknown, formData: FormData) {
@@ -29,8 +33,22 @@ export async function createProvider(_prev: unknown, formData: FormData) {
   const parsed = providerSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
 
+  const { movie_pattern, series_pattern, playback_type, ...providerCols } = parsed.data;
+  const public_config =
+    providerCols.adapter === "pattern-embed"
+      ? {
+          ...(movie_pattern ? { movie_pattern } : {}),
+          ...(series_pattern ? { series_pattern } : {}),
+          playback_type: playback_type ?? "embed",
+        }
+      : null;
+
   const supabase = await createClient();
-  const { data, error } = await supabase.from("providers").insert(parsed.data).select("id").single();
+  const { data, error } = await supabase
+    .from("providers")
+    .insert({ ...providerCols, public_config })
+    .select("id")
+    .single();
   if (error) return { error: error.message };
 
   await supabase.from("provider_capabilities").insert({ provider_id: data.id, hls: true });
