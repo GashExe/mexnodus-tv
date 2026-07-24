@@ -14,7 +14,16 @@ import {
   Radio,
   Settings2,
   Check,
+  ShieldCheck,
+  ExternalLink,
 } from "lucide-react";
+import {
+  STRICT_SANDBOX,
+  EMBED_ALLOW,
+  EMBED_PROBE_TIMEOUT_MS,
+  EMBED_LOAD_TIMEOUT_MS,
+  type EmbedSecurityLevel,
+} from "@/lib/security/embed-shield";
 
 export interface PlayerSource {
   id: string;
@@ -25,6 +34,15 @@ export interface PlayerSource {
   score?: number;
   resolutionHeight?: number | null;
   audioLanguages?: string[];
+  // ── Secure Embed Shield (solo fuentes `embed`) ──
+  /** Valor final del atributo `sandbox` (generado por el escudo). */
+  sandbox?: string;
+  /** Valor del atributo `allow`. */
+  allow?: string;
+  /** Nivel de seguridad efectivo del proveedor. */
+  securityLevel?: EmbedSecurityLevel;
+  /** true = no se enmarca; se ofrece apertura externa (proveedor incompatible). */
+  externalOnly?: boolean;
 }
 
 export interface PlayerProps {
@@ -114,6 +132,14 @@ export function Player({
         setLevel(-1);
         setAutoHeight(null);
         advancingRef.current = false;
+
+        // Proveedor incompatible con el sandbox (exige popups/navegación superior):
+        // NO se enmarca. Se muestra una tarjeta de apertura externa; no hay sonda.
+        if (source.externalOnly) {
+          setStatus("playing");
+          return;
+        }
+
         setStatus("switching");
 
         // Sonda de alcanzabilidad: no podemos ver dentro del iframe (cross-origin),
@@ -121,15 +147,15 @@ export function Player({
         // la petición falla o expira → saltamos a la siguiente señal.
         const ctrl = new AbortController();
         probeCtrlRef.current = ctrl;
-        const timer = window.setTimeout(() => ctrl.abort(), 7000);
+        const timer = window.setTimeout(() => ctrl.abort(), EMBED_PROBE_TIMEOUT_MS);
         try {
           await fetch(source.url, { mode: "no-cors", signal: ctrl.signal });
           window.clearTimeout(timer);
           if (probeCtrlRef.current !== ctrl) return; // otra carga tomó el control
           setStatus("playing"); // el iframe (render por JSX) muestra el reproductor
-          // Watchdog: si el iframe no dispara `onLoad` en 12s (servidor colgado o
+          // Watchdog: si el iframe no dispara `onLoad` a tiempo (servidor colgado o
           // framing bloqueado por X-Frame-Options), salta a la siguiente señal.
-          embedWatchdogRef.current = window.setTimeout(() => handleFatal(), 12000);
+          embedWatchdogRef.current = window.setTimeout(() => handleFatal(), EMBED_LOAD_TIMEOUT_MS);
         } catch {
           window.clearTimeout(timer);
           if (probeCtrlRef.current !== ctrl) return;
@@ -350,18 +376,27 @@ export function Player({
         onMouseMove={isLive ? wakeControls : undefined}
         onMouseLeave={isLive ? () => setControlsVisible(false) : undefined}
       >
-        {/* Fuentes `embed`: iframe del proveedor. El resto usa <video>/hls.js. */}
+        {/* Fuentes `embed`: iframe del proveedor bajo el Secure Embed Shield.
+            Un proveedor incompatible (external-only) no se enmarca: se ofrece
+            apertura externa. El resto usa <video>/hls.js. */}
         {isEmbed ? (
-          <iframe
-            key={current.url}
-            src={current.url}
-            title={`Reproduciendo ${title}`}
-            className="h-full w-full border-0"
-            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-            allowFullScreen
-            referrerPolicy="no-referrer"
-            onLoad={() => window.clearTimeout(embedWatchdogRef.current)}
-          />
+          current.externalOnly ? (
+            <ExternalEmbed url={current.url} />
+          ) : (
+            <iframe
+              key={current.url}
+              src={current.url}
+              title={`Reproduciendo ${title}`}
+              className="h-full w-full border-0"
+              // Secure Embed Shield: sandbox por perfil (nunca popups/top-nav/downloads),
+              // allow acotado y referrer oculto. Fallback seguro = perfil strict.
+              sandbox={current.sandbox ?? STRICT_SANDBOX}
+              allow={current.allow ?? EMBED_ALLOW}
+              allowFullScreen
+              referrerPolicy="no-referrer"
+              onLoad={() => window.clearTimeout(embedWatchdogRef.current)}
+            />
+          )
         ) : (
           /* En vivo NO lleva controles nativos: sin línea de tiempo; barra propia */
           <video
@@ -578,6 +613,45 @@ export function Player({
           <div className="mt-1 break-all text-ink-3">url: {current.url}</div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Proveedor marcado como `external-only`: exige capacidades que el escudo NUNCA
+ * concede (popups / navegación superior), así que no se enmarca. Se abre en una
+ * pestaña nueva SOLO por acción del usuario (no es un popup automático), con
+ * `rel="noopener noreferrer"` para que el sitio destino no controle esta ventana
+ * ni reciba el referer.
+ */
+function ExternalEmbed({ url }: { url: string }) {
+  let host = url;
+  try {
+    host = new URL(url).host;
+  } catch {
+    /* deja la url tal cual si no parsea */
+  }
+  return (
+    <div className="grid h-full w-full place-items-center bg-black p-6 text-center">
+      <div className="max-w-sm">
+        <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full bg-accent/15 text-accent">
+          <ShieldCheck size={22} />
+        </div>
+        <p className="font-medium text-white">Este proveedor se abre fuera del reproductor</p>
+        <p className="mt-1.5 text-sm text-ink-2">
+          Por seguridad no se incrusta: requiere permisos (ventanas emergentes o
+          navegación) que el escudo no concede.
+        </p>
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-focusable
+          className="mt-4 inline-flex items-center gap-2 rounded-pill bg-accent px-5 py-2.5 text-sm font-semibold text-white transition hover:brightness-110"
+        >
+          <ExternalLink size={15} /> Abrir en {host}
+        </a>
+      </div>
     </div>
   );
 }

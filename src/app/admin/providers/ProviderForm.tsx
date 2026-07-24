@@ -42,6 +42,41 @@ export function ProviderForm() {
         </label>
       </fieldset>
 
+      {/* Secure Embed Shield: perfil de seguridad del embed. */}
+      <fieldset className="grid gap-3 rounded-[10px] border border-line/60 bg-bg/40 p-3 sm:col-span-2 sm:grid-cols-2">
+        <legend className="px-1 text-xs text-ink-3">Secure Embed Shield (seguridad del iframe)</legend>
+        <label className="text-sm">Nivel de seguridad
+          <select name="embed_security_level" className={field} defaultValue="strict">
+            <option value="strict">strict · allow-scripts allow-presentation</option>
+            <option value="compatible">compatible · + allow-same-origin</option>
+            <option value="external-only">external-only · no se enmarca</option>
+          </select>
+        </label>
+        <label className="text-sm">Riesgo de popup
+          <select name="popup_risk" className={field} defaultValue="medium">
+            {["low", "medium", "high"].map((t) => <option key={t}>{t}</option>)}
+          </select>
+        </label>
+        <label className="text-sm">Riesgo de redirección
+          <select name="redirect_risk" className={field} defaultValue="medium">
+            {["low", "medium", "high"].map((t) => <option key={t}>{t}</option>)}
+          </select>
+        </label>
+        <div className="flex flex-col justify-end gap-2 text-sm">
+          <label className="flex items-center gap-2">
+            <input type="checkbox" name="requires_same_origin" className="accent-accent" /> Requiere same-origin
+          </label>
+          <label className="flex items-center gap-2">
+            <input type="checkbox" name="sandbox_compatible" defaultChecked className="accent-accent" /> Compatible con sandbox
+          </label>
+        </div>
+        <p className="text-xs text-ink-3 sm:col-span-2">
+          Nunca se conceden <code>allow-popups</code>, <code>allow-top-navigation</code> ni{" "}
+          <code>allow-downloads</code>. Un proveedor con riesgo alto de popup/redirección se marca
+          incompatible y se ofrece solo como apertura externa.
+        </p>
+      </fieldset>
+
       <div className="flex items-end gap-3 sm:col-span-2">
         <button disabled={pending} className="rounded-pill bg-accent px-5 py-2.5 font-semibold text-white disabled:opacity-60">
           {pending ? "Creando…" : "Crear proveedor"}

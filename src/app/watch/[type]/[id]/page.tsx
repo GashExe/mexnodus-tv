@@ -13,6 +13,7 @@ import { flagEmoji, countryName } from "@/lib/geo";
 import { Chip, SectionTitle } from "@/components/ui";
 import { ChannelCard } from "@/components/ChannelCard";
 import type { ScoredCandidate } from "@/lib/playback/engine";
+import type { SandboxPlan } from "@/lib/security/embed-shield";
 
 function hhmm(iso: string) {
   return new Date(iso).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
@@ -26,7 +27,7 @@ function progressPct(start: string, end: string) {
   return Math.round(((now - s) / (e - s)) * 100);
 }
 
-function candidateToSource(sc: ScoredCandidate): PlayerSource {
+function candidateToSource(sc: ScoredCandidate, plan?: SandboxPlan): PlayerSource {
   const c = sc.candidate;
   const lang = c.audio_languages?.[0];
   return {
@@ -38,6 +39,15 @@ function candidateToSource(sc: ScoredCandidate): PlayerSource {
     score: sc.score,
     resolutionHeight: c.resolution_height,
     audioLanguages: c.audio_languages,
+    // Secure Embed Shield: sandbox/allow ya resueltos por proveedor.
+    ...(plan
+      ? {
+          securityLevel: plan.level,
+          sandbox: plan.sandbox ?? undefined,
+          allow: plan.allow,
+          externalOnly: plan.renderMode === "external",
+        }
+      : {}),
   };
 }
 
@@ -147,9 +157,14 @@ export default async function WatchPage({ params }: { params: Promise<{ type: st
 
   // ── Películas / episodios ──
   const kind = type === "episode" ? "episode" : "title";
-  const { result } = await resolvePlayback({ kind, id }, user?.id ?? null);
+  const { result, security } = await resolvePlayback({ kind, id }, user?.id ?? null);
   const ordered = result.primary ? [result.primary, ...result.fallbacks] : [];
-  const sources = ordered.map(candidateToSource).filter((s) => s.url);
+  const sources = ordered
+    .map((sc) => candidateToSource(sc, security[sc.candidate.id]))
+    .filter((s) => s.url)
+    // Las fuentes solo-externas (proveedor incompatible con el sandbox) se
+    // prueban al final: primero una que sí se pueda enmarcar de forma segura.
+    .sort((a, b) => Number(a.externalOnly ?? false) - Number(b.externalOnly ?? false));
 
   // progreso inicial
   let initial = 0;

@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse, type NextRequest } from "next/server";
 import { publicEnv } from "@/lib/env";
+import { PERMISSIONS_POLICY } from "@/lib/security/embed-shield";
 
 /**
  * Orígenes permitidos en `frame-src`, derivados de los proveedores `pattern-embed`
@@ -127,8 +128,15 @@ export async function updateSession(request: NextRequest) {
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
+    // Un embed no puede escapar de su marco hacia la ventana principal.
+    "frame-ancestors 'self'",
   ].join("; ");
   response.headers.set("Content-Security-Policy", csp);
+
+  // Secure Embed Shield (nivel documento): deniega globalmente cámara, micrófono,
+  // geolocalización, portapapeles y APIs de pago — para el documento Y sus iframes.
+  // Ningún proveedor puede reactivarlas desde su propio `allow`.
+  response.headers.set("Permissions-Policy", PERMISSIONS_POLICY);
 
   return response;
 }
