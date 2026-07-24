@@ -46,9 +46,9 @@ export function ProviderForm() {
       <fieldset className="grid gap-3 rounded-[10px] border border-line/60 bg-bg/40 p-3 sm:col-span-2 sm:grid-cols-2">
         <legend className="px-1 text-xs text-ink-3">Secure Embed Shield (seguridad del iframe)</legend>
         <label className="text-sm">Nivel de seguridad
-          <select name="embed_security_level" className={field} defaultValue="strict">
-            <option value="strict">strict · allow-scripts allow-presentation</option>
-            <option value="compatible">compatible · + allow-same-origin</option>
+          <select name="embed_security_level" className={field} defaultValue="compatible">
+            <option value="compatible">compatible · allow-scripts allow-same-origin</option>
+            <option value="strict">strict · allow-scripts</option>
             <option value="external-only">external-only · no se enmarca</option>
           </select>
         </label>

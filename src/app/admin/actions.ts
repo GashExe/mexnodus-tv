@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getActor, isStaff } from "@/lib/auth";
 import { assertSafeUrl } from "@/lib/ssrf";
 import { assessProvider, readProviderSecurity } from "@/lib/security/embed-shield";
+import { invalidateFrameOriginsCache } from "@/lib/security/frame-origins";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
@@ -59,7 +60,7 @@ export async function createProvider(_prev: unknown, formData: FormData) {
           playback_type: playback_type ?? "embed",
           // Secure Embed Shield: config de seguridad del proveedor de embed.
           security: {
-            embed_security_level: embed_security_level ?? "strict",
+            embed_security_level: embed_security_level ?? "compatible",
             requires_same_origin: requires_same_origin ?? false,
             popup_risk: popup_risk ?? "medium",
             redirect_risk: redirect_risk ?? "medium",
@@ -69,24 +70,62 @@ export async function createProvider(_prev: unknown, formData: FormData) {
         }
       : null;
 
+  // `domain` vacío → null (para que la derivación de origen no reciba "").
+  const domain = providerCols.domain ? providerCols.domain.trim() : null;
+
   const supabase = await createClient();
+  // Devolvemos las columnas que alimentan la CSP dinámica para CONFIRMAR que se
+  // persistieron: adapter, is_active, domain y public_config.
   const { data, error } = await supabase
     .from("providers")
-    .insert({ ...providerCols, public_config })
-    .select("id")
+    .insert({ ...providerCols, domain, public_config })
+    .select("id, adapter, is_active, domain, public_config")
     .single();
-  if (error) return { error: error.message };
+  if (error) {
+    console.error("[provider.create] error insertando proveedor:", error.message);
+    return { error: error.message };
+  }
 
-  await supabase.from("provider_capabilities").insert({ provider_id: data.id, hls: true });
+  await supabase.from("provider_capabilities").insert({
+    provider_id: data.id,
+    hls: true,
+    embed: providerCols.adapter === "pattern-embed",
+  });
   await supabase.from("audit_logs").insert({
     actor_id: actor.id,
     action: "provider.create",
     entity: "providers",
     entity_id: data.id,
-    metadata: { slug: parsed.data.slug },
+    metadata: { slug: parsed.data.slug, adapter: data.adapter, is_active: data.is_active },
   });
+
+  // Un proveedor nuevo puede cambiar `frame-src`: invalida la caché y revalida.
+  invalidateFrameOriginsCache();
   revalidatePath("/admin/providers");
+  revalidatePath("/watch", "layout");
   return { ok: true, id: data.id };
+}
+
+// ── Activar / desactivar proveedor (afecta la CSP dinámica `frame-src`) ──
+export async function setProviderActive(id: string, active: boolean) {
+  const actor = await requireStaff();
+  if (actor.role !== "admin") return { error: "Solo un admin puede activar/desactivar proveedores" };
+  const supabase = await createClient();
+  const { error } = await supabase.from("providers").update({ is_active: active }).eq("id", id);
+  if (error) {
+    console.error("[provider.setActive] error:", error.message);
+    return { error: error.message };
+  }
+  await supabase.from("audit_logs").insert({
+    actor_id: actor.id,
+    action: active ? "provider.activate" : "provider.deactivate",
+    entity: "providers",
+    entity_id: id,
+  });
+  invalidateFrameOriginsCache();
+  revalidatePath("/admin/providers");
+  revalidatePath("/watch", "layout");
+  return { ok: true };
 }
 
 // ── Crear disponibilidad ──

@@ -1,9 +1,13 @@
 import { createClient } from "@/lib/supabase/server";
 import { ProviderForm } from "./ProviderForm";
 import { SecurityTestButton } from "./SecurityTestButton";
+import { ProviderActiveToggle } from "./ProviderActiveToggle";
 import { Chip, TechDot } from "@/components/ui";
 import { planFromConfig, readProviderSecurity } from "@/lib/security/embed-shield";
+import { getEmbedFrameOrigins } from "@/lib/security/frame-origins";
 import type { Provider, TechStatus } from "@/lib/types/db";
+
+export const dynamic = "force-dynamic";
 
 /** ¿Este proveedor puede servir embeds (y por tanto le aplica el escudo)? */
 function isEmbedProvider(p: Provider): boolean {
@@ -22,6 +26,9 @@ export default async function ProvidersPage() {
   const supabase = await createClient();
   const { data } = await supabase.from("providers").select("*").order("priority", { ascending: false });
   const providers = (data as Provider[]) ?? [];
+
+  // Orígenes que realmente entran en `frame-src` ahora mismo (diagnóstico).
+  const { origins: frameOrigins, error: frameOriginsError } = await getEmbedFrameOrigins({ fresh: true });
 
   return (
     <div className="space-y-6">
@@ -55,11 +62,50 @@ export default async function ProvidersPage() {
                 <td className="px-4 py-3 font-mono text-[12px] text-ink-2">{p.adapter}</td>
                 <td className="px-4 py-3"><Chip tone={p.trust_level === "verified" ? "accent" : "default"}>{p.trust_level}</Chip></td>
                 <td className="px-4 py-3 font-mono">{p.priority}</td>
-                <td className="px-4 py-3"><TechDot status={p.status as TechStatus} /></td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <TechDot status={p.status as TechStatus} />
+                    <ProviderActiveToggle id={p.id} active={p.is_active} />
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
+      </div>
+
+      {/* CSP dinámica: orígenes que entran ahora mismo en `frame-src`. */}
+      <div className="rounded-card border border-line bg-surface p-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-lg font-semibold tracking-tight">frame-src activo (CSP dinámica)</h2>
+          <a
+            href="/api/admin/frame-origins?fresh=1"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-mono text-[11px] text-accent hover:underline"
+          >
+            GET /api/admin/frame-origins
+          </a>
+        </div>
+        <p className="mt-1 text-sm text-ink-3">
+          Orígenes exactos derivados de <code>domain</code>, <code>movie_pattern</code> y{" "}
+          <code>series_pattern</code> de los proveedores <code>pattern-embed</code> activos. Se
+          recalcula al crear, editar, activar o desactivar un proveedor — sin redeploy.
+        </p>
+        {frameOriginsError && (
+          <p className="mt-2 rounded-[8px] border border-crit/30 bg-crit/10 px-3 py-2 text-[12px] text-crit">
+            Error al leer proveedores: {frameOriginsError.message}
+          </p>
+        )}
+        <div className="mt-3 flex flex-wrap gap-1.5 font-mono text-[11px]">
+          <Chip>https://www.youtube-nocookie.com</Chip>
+          {frameOrigins.map((o) => (
+            <Chip key={o} tone="accent">{o}</Chip>
+          ))}
+          {frameOrigins.length === 0 && !frameOriginsError && (
+            <span className="text-ink-3">Sin orígenes embed activos.</span>
+          )}
+        </div>
       </div>
 
       {/* Secure Embed Shield: sandbox final generado para cada proveedor de embed. */}

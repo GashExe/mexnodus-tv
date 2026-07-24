@@ -1,61 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
-import { createClient } from "@supabase/supabase-js";
 import { NextResponse, type NextRequest } from "next/server";
 import { publicEnv } from "@/lib/env";
 import { PERMISSIONS_POLICY } from "@/lib/security/embed-shield";
-
-/**
- * Orígenes permitidos en `frame-src`, derivados de los proveedores `pattern-embed`
- * activos. Se leen del lado servidor con la llave service-role (nunca llega al
- * navegador), así NO hace falta ninguna migración ni función SQL. Cacheado 30s:
- * agregar un dominio en el panel se refleja en ≤30s, sin costo por request.
- */
-let frameOriginsCache: { origins: string[]; at: number } | null = null;
-const FRAME_CACHE_MS = 30_000;
-
-function originOf(value: string | undefined | null): string | null {
-  if (!value) return null;
-  const raw = /^https?:\/\//.test(value) ? value : `https://${value}`;
-  try {
-    return new URL(raw).origin;
-  } catch {
-    return null;
-  }
-}
-
-async function embedFrameOrigins(): Promise<string[]> {
-  const now = Date.now();
-  if (frameOriginsCache && now - frameOriginsCache.at < FRAME_CACHE_MS) {
-    return frameOriginsCache.origins;
-  }
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!serviceKey) return frameOriginsCache?.origins ?? [];
-  try {
-    const admin = createClient(publicEnv.supabaseUrl, serviceKey, { auth: { persistSession: false } });
-    const { data } = await admin
-      .from("providers")
-      .select("domain, public_config")
-      .eq("is_active", true)
-      .eq("adapter", "pattern-embed");
-    const set = new Set<string>();
-    for (const p of (data ?? []) as { domain: string | null; public_config: Record<string, unknown> | null }[]) {
-      const cfg = p.public_config ?? {};
-      for (const o of [
-        originOf(cfg.movie_pattern as string | undefined),
-        originOf(cfg.series_pattern as string | undefined),
-        originOf(p.domain),
-      ]) {
-        if (o) set.add(o);
-      }
-    }
-    const origins = [...set];
-    frameOriginsCache = { origins, at: now };
-    return origins;
-  } catch {
-    // La BD no respondió: no bloquea la app, solo no añade orígenes embed.
-    return frameOriginsCache?.origins ?? [];
-  }
-}
+import { getEmbedFrameOrigins } from "@/lib/security/frame-origins";
 
 /**
  * Refresca la sesión de Supabase en cada request y protege rutas privadas.
@@ -110,9 +57,12 @@ export async function updateSession(request: NextRequest) {
   }
 
   // CSP estricta. media-src permite HLS autorizado; frame-src permite el embed de
-  // YouTube (tráilers TMDB) + los orígenes de los proveedores `pattern-embed`
-  // activos (se administran desde el panel, no en código — ver 0014).
-  const embedOrigins = await embedFrameOrigins();
+  // YouTube (tráilers TMDB) + los orígenes exactos de los proveedores
+  // `pattern-embed` activos (se administran desde el panel, sin código ni redeploy).
+  const { origins: embedOrigins, error: originsError } = await getEmbedFrameOrigins();
+  if (originsError) {
+    console.error("[middleware] no se pudieron leer los frame-src origins:", originsError.message);
+  }
   const frameSrc = ["https://www.youtube-nocookie.com", ...embedOrigins].join(" ");
   const csp = [
     "default-src 'self'",
@@ -137,6 +87,12 @@ export async function updateSession(request: NextRequest) {
   // geolocalización, portapapeles y APIs de pago — para el documento Y sus iframes.
   // Ningún proveedor puede reactivarlas desde su propio `allow`.
   response.headers.set("Permissions-Policy", PERMISSIONS_POLICY);
+
+  // Documento de reproducción sin caché mientras se diagnostica la CSP dinámica:
+  // garantiza que el `frame-src` recién actualizado se sirva siempre fresco.
+  if (path.startsWith("/watch")) {
+    response.headers.set("Cache-Control", "no-store");
+  }
 
   return response;
 }

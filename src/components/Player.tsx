@@ -18,7 +18,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import {
-  STRICT_SANDBOX,
+  DEFAULT_EMBED_SANDBOX,
   EMBED_ALLOW,
   EMBED_PROBE_TIMEOUT_MS,
   EMBED_LOAD_TIMEOUT_MS,
@@ -142,25 +142,30 @@ export function Player({
 
         setStatus("switching");
 
-        // Sonda de alcanzabilidad: no podemos ver dentro del iframe (cross-origin),
-        // pero sí comprobar que el servidor RESPONDE. Si está caído/inalcanzable,
-        // la petición falla o expira → saltamos a la siguiente señal.
+        // Sonda de alcanzabilidad (cross-origin, no-cors): es un DIAGNÓSTICO NO
+        // CRÍTICO. Una petición bloqueada por CORS, un beacon de telemetría caído
+        // o un bache de red NO implican que el embed no reproduzca, así que su
+        // fallo NO fuerza failover. El error de reproducción real lo determina el
+        // watchdog de carga del iframe (nunca dispara `onLoad`).
         const ctrl = new AbortController();
         probeCtrlRef.current = ctrl;
         const timer = window.setTimeout(() => ctrl.abort(), EMBED_PROBE_TIMEOUT_MS);
         try {
           await fetch(source.url, { mode: "no-cors", signal: ctrl.signal });
+        } catch (e) {
+          // No es un error de reproducción: se registra como diagnóstico y se sigue.
+          if (probeCtrlRef.current === ctrl) {
+            console.warn("[embed] sonda de alcanzabilidad no concluyente (no crítico):", e);
+          }
+        } finally {
           window.clearTimeout(timer);
-          if (probeCtrlRef.current !== ctrl) return; // otra carga tomó el control
-          setStatus("playing"); // el iframe (render por JSX) muestra el reproductor
-          // Watchdog: si el iframe no dispara `onLoad` a tiempo (servidor colgado o
-          // framing bloqueado por X-Frame-Options), salta a la siguiente señal.
-          embedWatchdogRef.current = window.setTimeout(() => handleFatal(), EMBED_LOAD_TIMEOUT_MS);
-        } catch {
-          window.clearTimeout(timer);
-          if (probeCtrlRef.current !== ctrl) return;
-          handleFatal(); // servidor caído/inalcanzable → siguiente señal
         }
+        if (probeCtrlRef.current !== ctrl) return; // otra carga tomó el control
+        setStatus("playing"); // el iframe (render por JSX) muestra el reproductor
+        // Watchdog: si el iframe no dispara `onLoad` a tiempo (servidor colgado o
+        // framing bloqueado por X-Frame-Options), ESO sí es un fallo real → salta
+        // a la siguiente señal.
+        embedWatchdogRef.current = window.setTimeout(() => handleFatal(), EMBED_LOAD_TIMEOUT_MS);
         return;
       }
 
@@ -389,8 +394,9 @@ export function Player({
               title={`Reproduciendo ${title}`}
               className="h-full w-full border-0"
               // Secure Embed Shield: sandbox por perfil (nunca popups/top-nav/downloads),
-              // allow acotado y referrer oculto. Fallback seguro = perfil strict.
-              sandbox={current.sandbox ?? STRICT_SANDBOX}
+              // allow acotado y referrer oculto. Fallback = perfil compatible
+              // (conserva el origen del embed y evita el error «Origin null» de CORS).
+              sandbox={current.sandbox ?? DEFAULT_EMBED_SANDBOX}
               allow={current.allow ?? EMBED_ALLOW}
               allowFullScreen
               referrerPolicy="no-referrer"

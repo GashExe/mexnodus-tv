@@ -35,13 +35,20 @@ export type RiskLevel = "low" | "medium" | "high";
  * Tokens `sandbox` concedidos por perfil. `external-only` no aparece aquí porque
  * su política es NO cargar dentro de un iframe.
  *
+ * NO se usa `allow-presentation`: Safari lo reporta como flag inválido y no
+ * aporta al caso de uso. `compatible` añade `allow-same-origin` para CONSERVAR
+ * el origen del embed — sin él, el frame recibe un origen opaco/`null` y sus
+ * propios recursos fallan con «Origin null is not allowed by
+ * Access-Control-Allow-Origin». Como el embed es de OTRO dominio, mantener su
+ * origen no le da acceso al nuestro (sigue siendo cross-origin).
+ *
  * Deliberadamente ausentes (ver {@link FORBIDDEN_SANDBOX_TOKENS}): allow-forms,
  * allow-modals, allow-pointer-lock, allow-popups, allow-top-navigation,
  * allow-downloads… Todo lo que no se concede queda bloqueado por defecto.
  */
 export const SANDBOX_PROFILES = {
-  strict: ["allow-scripts", "allow-presentation"],
-  compatible: ["allow-scripts", "allow-same-origin", "allow-presentation"],
+  strict: ["allow-scripts"],
+  compatible: ["allow-scripts", "allow-same-origin"],
 } as const satisfies Record<string, readonly string[]>;
 
 /**
@@ -57,16 +64,21 @@ export const FORBIDDEN_SANDBOX_TOKENS = [
   "allow-downloads",
 ] as const;
 
-/** Sandbox del perfil `strict`, precomputado (fallback seguro del cliente). */
+/** Sandbox del perfil `strict`, precomputado. */
 export const STRICT_SANDBOX = SANDBOX_PROFILES.strict.join(" ");
+/**
+ * Sandbox por defecto para un embed sin config explícita: `compatible`, que
+ * CONSERVA el origen (evita el error «Origin null» de CORS). Fallback del cliente.
+ */
+export const DEFAULT_EMBED_SANDBOX = SANDBOX_PROFILES.compatible.join(" ");
 
 /**
- * Atributo `allow` del iframe. Concede EXACTAMENTE tres capacidades benignas.
+ * Atributo `allow` del iframe. Concede capacidades benignas de reproducción.
  * Todo lo demás (cámara, micrófono, geolocalización, portapapeles, pago…) queda
  * denegado por omisión dentro del frame y, además, por la `Permissions-Policy`
  * del documento (defensa en profundidad).
  */
-export const EMBED_ALLOW = "autoplay; fullscreen; picture-in-picture";
+export const EMBED_ALLOW = "autoplay; fullscreen; picture-in-picture; encrypted-media";
 
 export const EMBED_REFERRER_POLICY = "no-referrer" as const;
 
@@ -130,16 +142,17 @@ function asRisk(v: unknown, fallback: RiskLevel): RiskLevel {
 }
 
 /**
- * Lee la config de seguridad desde `public_config`, con defaults CONSERVADORES:
- * un proveedor sin datos se trata como `strict` (lo más cerrado). El admin sube
- * a `compatible` solo cuando el reproductor lo necesite.
+ * Lee la config de seguridad desde `public_config`. Default = `compatible`:
+ * conserva el origen del embed (necesario para que sus recursos no fallen con
+ * «Origin null» de CORS). Sigue sin conceder popups/top-nav/downloads. El admin
+ * baja a `strict` para casos que no necesiten same-origin, o `external-only`.
  */
 export function readProviderSecurity(
   publicConfig: Record<string, unknown> | null | undefined,
 ): ProviderSecurity {
   const raw = (publicConfig?.security ?? {}) as Record<string, unknown>;
   return {
-    embed_security_level: asLevel(raw.embed_security_level, "strict"),
+    embed_security_level: asLevel(raw.embed_security_level, "compatible"),
     requires_same_origin: raw.requires_same_origin === true,
     popup_risk: asRisk(raw.popup_risk, "medium"),
     redirect_risk: asRisk(raw.redirect_risk, "medium"),
