@@ -1,30 +1,57 @@
 import { createServerClient } from "@supabase/ssr";
+import { createClient } from "@supabase/supabase-js";
 import { NextResponse, type NextRequest } from "next/server";
 import { publicEnv } from "@/lib/env";
 
-type SupabaseLike = ReturnType<typeof createServerClient>;
-
 /**
  * Orígenes permitidos en `frame-src`, derivados de los proveedores `pattern-embed`
- * activos (función SQL `embed_frame_origins`). Se cachea en memoria 30s para no
- * consultar la BD en cada request: agregar un dominio en el panel tarda ≤30s en
- * reflejarse, pero verlo no cuesta consultas extra.
+ * activos. Se leen del lado servidor con la llave service-role (nunca llega al
+ * navegador), así NO hace falta ninguna migración ni función SQL. Cacheado 30s:
+ * agregar un dominio en el panel se refleja en ≤30s, sin costo por request.
  */
 let frameOriginsCache: { origins: string[]; at: number } | null = null;
 const FRAME_CACHE_MS = 30_000;
 
-async function embedFrameOrigins(supabase: SupabaseLike): Promise<string[]> {
+function originOf(value: string | undefined | null): string | null {
+  if (!value) return null;
+  const raw = /^https?:\/\//.test(value) ? value : `https://${value}`;
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return null;
+  }
+}
+
+async function embedFrameOrigins(): Promise<string[]> {
   const now = Date.now();
   if (frameOriginsCache && now - frameOriginsCache.at < FRAME_CACHE_MS) {
     return frameOriginsCache.origins;
   }
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceKey) return frameOriginsCache?.origins ?? [];
   try {
-    const { data } = await supabase.rpc("embed_frame_origins");
-    const origins = Array.isArray(data) ? (data as unknown[]).filter((o): o is string => typeof o === "string") : [];
+    const admin = createClient(publicEnv.supabaseUrl, serviceKey, { auth: { persistSession: false } });
+    const { data } = await admin
+      .from("providers")
+      .select("domain, public_config")
+      .eq("is_active", true)
+      .eq("adapter", "pattern-embed");
+    const set = new Set<string>();
+    for (const p of (data ?? []) as { domain: string | null; public_config: Record<string, unknown> | null }[]) {
+      const cfg = p.public_config ?? {};
+      for (const o of [
+        originOf(cfg.movie_pattern as string | undefined),
+        originOf(cfg.series_pattern as string | undefined),
+        originOf(p.domain),
+      ]) {
+        if (o) set.add(o);
+      }
+    }
+    const origins = [...set];
     frameOriginsCache = { origins, at: now };
     return origins;
   } catch {
-    // BD/función no disponible: no bloquea la app, solo no añade orígenes embed.
+    // La BD no respondió: no bloquea la app, solo no añade orígenes embed.
     return frameOriginsCache?.origins ?? [];
   }
 }
@@ -84,7 +111,7 @@ export async function updateSession(request: NextRequest) {
   // CSP estricta. media-src permite HLS autorizado; frame-src permite el embed de
   // YouTube (tráilers TMDB) + los orígenes de los proveedores `pattern-embed`
   // activos (se administran desde el panel, no en código — ver 0014).
-  const embedOrigins = await embedFrameOrigins(supabase);
+  const embedOrigins = await embedFrameOrigins();
   const frameSrc = ["https://www.youtube-nocookie.com", ...embedOrigins].join(" ");
   const csp = [
     "default-src 'self'",
