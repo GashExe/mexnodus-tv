@@ -88,6 +88,43 @@ export const EMBED_PROBE_TIMEOUT_MS = 7_000;
 /** Vigía: si el iframe no dispara `onLoad`, se salta a la siguiente fuente. */
 export const EMBED_LOAD_TIMEOUT_MS = 12_000;
 
+// ── Clasificación de eventos del embed (crítico vs no crítico) ───────────────
+/**
+ * Firma de los mensajes `postMessage` que un embed COOPERANTE (p.ej. el
+ * reproductor de primera parte) puede enviar a la ventana anfitriona para
+ * informar de su salud. Los embeds opacos de terceros no la envían; su ausencia
+ * NO es un fallo (la carga se vigila por timeout aparte).
+ */
+export const SHIELD_EVENT_SOURCE = "secure-embed-shield" as const;
+
+export type EmbedEventKind =
+  | "popup_blocked" // el sandbox bloqueó window.open → ÉXITO del escudo, no fallo
+  | "icon_load_failed" // iconos internos del reproductor (PiP/AirPlay) no cargaron
+  | "telemetry_failed" // un beacon/analítica del embed falló
+  | "iframe_loaded" // el documento del iframe cargó
+  | "playback_started" // el embed confirma que la reproducción arrancó
+  | "playback_error"; // el embed reporta que NO puede reproducir
+
+/**
+ * Un popup bloqueado por el sandbox, un icono de control que no carga o un beacon
+ * de telemetría caído NO son fallos de reproducción: son ruido benigno (o, en el
+ * caso del popup, la señal de que el escudo funcionó). Solo `playback_error`
+ * (el embed declara que no puede reproducir) es un fallo REAL reportable; la
+ * ausencia de carga del iframe se detecta por separado por timeout.
+ */
+export function isCriticalEmbedEvent(kind: EmbedEventKind): boolean {
+  return kind === "playback_error";
+}
+
+/** Eventos benignos que NUNCA deben provocar fallback ni marcar `unavailable`. */
+export const NON_CRITICAL_EMBED_EVENTS: readonly EmbedEventKind[] = [
+  "popup_blocked",
+  "icon_load_failed",
+  "telemetry_failed",
+  "iframe_loaded",
+  "playback_started",
+];
+
 /**
  * `Permissions-Policy` a nivel de documento. Deniega (`=()`) las capacidades
  * sensibles para TODOS (documento e iframes por igual) — así ningún embed puede

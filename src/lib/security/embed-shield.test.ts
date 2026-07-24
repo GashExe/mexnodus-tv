@@ -9,6 +9,10 @@ import {
   readProviderSecurity,
   planFromConfig,
   assessProvider,
+  isCriticalEmbedEvent,
+  NON_CRITICAL_EMBED_EVENTS,
+  SHIELD_EVENT_SOURCE,
+  type EmbedEventKind,
   type ProviderSecurity,
 } from "./embed-shield";
 
@@ -173,5 +177,36 @@ describe("assessProvider", () => {
   it("riesgos bajos con nivel strict → mantiene strict", () => {
     const a = assessProvider(sec({ embed_security_level: "strict" }));
     expect(a.recommendedLevel).toBe("strict");
+  });
+});
+
+describe("clasificación de eventos del embed", () => {
+  it("un popup bloqueado NO es un fallo crítico (es éxito del escudo)", () => {
+    expect(isCriticalEmbedEvent("popup_blocked")).toBe(false);
+  });
+
+  it("iconos PiP/AirPlay y telemetría son no críticos", () => {
+    expect(isCriticalEmbedEvent("icon_load_failed")).toBe(false);
+    expect(isCriticalEmbedEvent("telemetry_failed")).toBe(false);
+  });
+
+  it("arranque/carga del embed son no críticos", () => {
+    expect(isCriticalEmbedEvent("playback_started")).toBe(false);
+    expect(isCriticalEmbedEvent("iframe_loaded")).toBe(false);
+  });
+
+  it("solo playback_error es crítico (fallo real reportado)", () => {
+    expect(isCriticalEmbedEvent("playback_error")).toBe(true);
+  });
+
+  it("todos los NON_CRITICAL_EMBED_EVENTS son efectivamente no críticos", () => {
+    for (const kind of NON_CRITICAL_EMBED_EVENTS) {
+      expect(isCriticalEmbedEvent(kind as EmbedEventKind)).toBe(false);
+    }
+    expect(NON_CRITICAL_EMBED_EVENTS).toContain("popup_blocked");
+  });
+
+  it("la firma de los mensajes del escudo es estable", () => {
+    expect(SHIELD_EVENT_SOURCE).toBe("secure-embed-shield");
   });
 });

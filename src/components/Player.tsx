@@ -22,6 +22,9 @@ import {
   EMBED_ALLOW,
   EMBED_PROBE_TIMEOUT_MS,
   EMBED_LOAD_TIMEOUT_MS,
+  SHIELD_EVENT_SOURCE,
+  isCriticalEmbedEvent,
+  type EmbedEventKind,
   type EmbedSecurityLevel,
 } from "@/lib/security/embed-shield";
 
@@ -92,6 +95,10 @@ export function Player({
   // ── failover de fuentes `embed` (iframe cross-origin) ─────────────────────
   const probeCtrlRef = useRef<AbortController | null>(null);
   const embedWatchdogRef = useRef<number | undefined>(undefined);
+  // Un popup bloqueado por el sandbox es ÉXITO del escudo, NO un fallo: se cuenta
+  // y se registra, pero jamás cambia el estado ni dispara failover.
+  const [blockedPopups, setBlockedPopups] = useState(0);
+  const playbackConfirmedRef = useRef(false); // el embed confirmó reproducción
 
   // ── fallback automático a la siguiente fuente aprobada ─────────────────────
   const handleFatal = useCallback(() => {
@@ -217,9 +224,14 @@ export function Player({
           return;
         }
       }
-      // nativo (Safari/iOS o archivo directo): el error del <video> dispara el failover
+      // nativo (Safari/iOS o archivo directo): solo un error REAL de media
+      // (`video.error` presente) dispara el failover. Los fallos de iconos
+      // internos de los controles de Safari (PiP/AirPlay) no fijan `video.error`
+      // ni disparan este handler, así que no cuentan como fallo de reproducción.
       video.src = source.url;
-      video.onerror = () => handleFatal();
+      video.onerror = () => {
+        if (video.error) handleFatal();
+      };
       video.play().then(() => setStatus("playing")).catch(() => {});
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -227,6 +239,8 @@ export function Player({
   );
 
   useEffect(() => {
+    // nueva fuente: rearma la confirmación de reproducción del embed
+    playbackConfirmedRef.current = false;
     void load(index);
     return () => {
       if (hlsRef.current) {
@@ -237,6 +251,62 @@ export function Player({
       window.clearTimeout(embedWatchdogRef.current);
     };
   }, [index, load]);
+
+  // ── Señales de salud del embed (postMessage) ───────────────────────────────
+  // Un embed COOPERANTE (p.ej. el reproductor de primera parte) puede informar
+  // popups bloqueados, iconos que no cargan, arranque de reproducción o error.
+  // Clasificamos: los benignos se cuentan/registran SIN cambiar de estado; solo
+  // un `playback_error` explícito dispara el failover.
+  useEffect(() => {
+    function onMessage(e: MessageEvent) {
+      const d = e.data as { source?: string; kind?: EmbedEventKind } | null;
+      if (!d || typeof d !== "object" || d.source !== SHIELD_EVENT_SOURCE || !d.kind) return;
+      const kind = d.kind;
+
+      if (kind === "popup_blocked") {
+        // ÉXITO del escudo: el iframe intentó abrir una ventana emergente y el
+        // sandbox (sin allow-popups) lo impidió. Se cuenta, no se degrada nada.
+        setBlockedPopups((n) => n + 1);
+        console.info("[embed] popup_blocked (no crítico): el escudo bloqueó una ventana emergente.");
+        return;
+      }
+      if (kind === "playback_started" || kind === "iframe_loaded") {
+        // Reproducción confirmada: cancela el vigía de carga (no habrá failover).
+        playbackConfirmedRef.current = true;
+        window.clearTimeout(embedWatchdogRef.current);
+        setStatus("playing");
+        return;
+      }
+      if (!isCriticalEmbedEvent(kind)) {
+        // icon_load_failed / telemetry_failed: ruido benigno mientras reproduce.
+        console.debug(`[embed] ${kind} (no crítico)`);
+        return;
+      }
+      // playback_error: el embed declara que NO puede reproducir → fallo real.
+      console.warn("[embed] playback_error: el proveedor no puede reproducir → siguiente fuente.");
+      handleFatal();
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [handleFatal]);
+
+  // ── Fallo REAL de carga: el CSP `frame-src` rechaza el iframe ───────────────
+  // Un rechazo de frame-src (p.ej. un redirect a un origen no autorizado) sí es
+  // un fallo de carga: se salta a la siguiente fuente al instante, sin esperar
+  // el vigía. NO se dispara por popups (los bloqueos de popup no son violaciones
+  // de CSP y no emiten este evento).
+  useEffect(() => {
+    function onViolation(e: SecurityPolicyViolationEvent) {
+      if (!e.violatedDirective.startsWith("frame-src")) return;
+      const blocked = e.blockedURI ?? "";
+      if (current?.url && blocked && current.url.startsWith(blocked)) {
+        console.warn("[embed] frame-src rechazó el iframe (fallo de carga real) → siguiente fuente:", blocked);
+        handleFatal();
+      }
+    }
+    document.addEventListener("securitypolicyviolation", onViolation);
+    return () => document.removeEventListener("securitypolicyviolation", onViolation);
+  }, [current?.url, handleFatal]);
 
   // sincroniza el estado play/pause del vídeo con la UI de controles propios
   useEffect(() => {
@@ -604,6 +674,12 @@ export function Player({
           <div className="mb-1 text-ink">{title}{subtitle ? ` — ${subtitle}` : ""}</div>
           <div>tipo: {current.playbackType} · resolución declarada: {current.resolutionHeight ?? "—"}p</div>
           <div>audio: {current.audioLanguages?.join(", ") || "—"}</div>
+          {isEmbed && (
+            <div className="text-good">
+              popups bloqueados por el escudo: {blockedPopups}
+              {blockedPopups > 0 ? " (comportamiento esperado, sin efecto en la reproducción)" : ""}
+            </div>
+          )}
           {current.score != null && <div>puntuación del engine: {current.score}</div>}
           {current.reasons && current.reasons.length > 0 && (
             <div className="mt-1 flex flex-wrap items-center gap-1">
