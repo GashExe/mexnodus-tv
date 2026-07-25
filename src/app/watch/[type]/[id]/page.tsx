@@ -13,6 +13,7 @@ import { flagEmoji, countryName } from "@/lib/geo";
 import { Chip, SectionTitle } from "@/components/ui";
 import { ChannelCard } from "@/components/ChannelCard";
 import type { ScoredCandidate } from "@/lib/playback/engine";
+import type { ReferrerPolicyValue } from "@/lib/security/embed-shield";
 
 function hhmm(iso: string) {
   return new Date(iso).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
@@ -26,7 +27,7 @@ function progressPct(start: string, end: string) {
   return Math.round(((now - s) / (e - s)) * 100);
 }
 
-function candidateToSource(sc: ScoredCandidate): PlayerSource {
+function candidateToSource(sc: ScoredCandidate, referrerPolicy?: ReferrerPolicyValue): PlayerSource {
   const c = sc.candidate;
   const lang = c.audio_languages?.[0];
   return {
@@ -38,6 +39,8 @@ function candidateToSource(sc: ScoredCandidate): PlayerSource {
     score: sc.score,
     resolutionHeight: c.resolution_height,
     audioLanguages: c.audio_languages,
+    // Política de referrer configurable por proveedor (p.ej. VidSrc = "origin").
+    ...(referrerPolicy ? { referrerPolicy } : {}),
   };
 }
 
@@ -147,9 +150,11 @@ export default async function WatchPage({ params }: { params: Promise<{ type: st
 
   // ── Películas / episodios ──
   const kind = type === "episode" ? "episode" : "title";
-  const { result } = await resolvePlayback({ kind, id }, user?.id ?? null);
+  const { result, referrerPolicyById } = await resolvePlayback({ kind, id }, user?.id ?? null);
   const ordered = result.primary ? [result.primary, ...result.fallbacks] : [];
-  const sources = ordered.map(candidateToSource).filter((s) => s.url);
+  const sources = ordered
+    .map((sc) => candidateToSource(sc, referrerPolicyById[sc.candidate.id]))
+    .filter((s) => s.url);
 
   // progreso inicial
   let initial = 0;

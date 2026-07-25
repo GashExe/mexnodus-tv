@@ -23,6 +23,7 @@ import {
   SHIELD_EVENT_SOURCE,
   isCriticalEmbedEvent,
   type EmbedEventKind,
+  type ReferrerPolicyValue,
 } from "@/lib/security/embed-shield";
 
 export interface PlayerSource {
@@ -34,6 +35,8 @@ export interface PlayerSource {
   score?: number;
   resolutionHeight?: number | null;
   audioLanguages?: string[];
+  /** Política de referrer del iframe, configurable por proveedor (fuentes embed). */
+  referrerPolicy?: ReferrerPolicyValue;
 }
 
 export interface PlayerProps {
@@ -447,7 +450,10 @@ export function Player({
             className="h-full w-full border-0"
             allow={EMBED_ALLOW}
             allowFullScreen
-            referrerPolicy={EMBED_REFERRER_POLICY}
+            // Some providers (e.g. VidSrc Ad-Free Plays) require a specific
+            // Referrer Policy to identify verified domains.
+            // This value is configurable per provider.
+            referrerPolicy={current.referrerPolicy ?? EMBED_REFERRER_POLICY}
             onLoad={() => window.clearTimeout(embedWatchdogRef.current)}
           />
         ) : (

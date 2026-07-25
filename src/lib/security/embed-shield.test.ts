@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   EMBED_ALLOW,
   EMBED_REFERRER_POLICY,
+  readReferrerPolicy,
   readProviderSecurity,
   assessProvider,
   isCriticalEmbedEvent,
@@ -23,7 +24,7 @@ describe("atributos del iframe embed (web, sin sandbox)", () => {
     }
   });
 
-  it("referrerPolicy es strict-origin-when-cross-origin", () => {
+  it("referrerPolicy por defecto es strict-origin-when-cross-origin", () => {
     expect(EMBED_REFERRER_POLICY).toBe("strict-origin-when-cross-origin");
   });
 
@@ -40,6 +41,28 @@ describe("atributos del iframe embed (web, sin sandbox)", () => {
     ]) {
       expect(mod[gone]).toBeUndefined();
     }
+  });
+});
+
+describe("readReferrerPolicy (configurable por proveedor)", () => {
+  it("sin config → default strict-origin-when-cross-origin", () => {
+    expect(readReferrerPolicy(null)).toBe("strict-origin-when-cross-origin");
+    expect(readReferrerPolicy({})).toBe("strict-origin-when-cross-origin");
+  });
+
+  it("VidSrc: referrer_policy = origin se respeta", () => {
+    expect(readReferrerPolicy({ referrer_policy: "origin" })).toBe("origin");
+  });
+
+  it("acepta todos los valores válidos", () => {
+    for (const v of ["origin", "strict-origin-when-cross-origin", "no-referrer", "unsafe-url"]) {
+      expect(readReferrerPolicy({ referrer_policy: v })).toBe(v);
+    }
+  });
+
+  it("valor inválido → cae al default", () => {
+    expect(readReferrerPolicy({ referrer_policy: "same-origin" })).toBe("strict-origin-when-cross-origin");
+    expect(readReferrerPolicy({ referrer_policy: 123 })).toBe("strict-origin-when-cross-origin");
   });
 });
 

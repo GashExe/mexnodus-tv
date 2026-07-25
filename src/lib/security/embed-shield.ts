@@ -41,11 +41,45 @@ export type RiskLevel = "low" | "medium" | "high";
 export const EMBED_ALLOW = "autoplay; fullscreen; picture-in-picture; encrypted-media";
 
 /**
- * `referrerPolicy` del iframe. `strict-origin-when-cross-origin` envía solo el
- * origen a destinos cross-origin (equilibra privacidad y compatibilidad: algunos
- * proveedores validan el `Referer` de origen y rechazan `no-referrer`).
+ * Valores de `referrerPolicy` soportados para el iframe de un proveedor.
+ * Some providers (e.g. VidSrc Ad-Free Plays) require a specific
+ * Referrer Policy to identify verified domains.
+ * This value is configurable per provider.
  */
-export const EMBED_REFERRER_POLICY = "strict-origin-when-cross-origin" as const;
+export type ReferrerPolicyValue =
+  | "origin"
+  | "strict-origin-when-cross-origin"
+  | "no-referrer"
+  | "unsafe-url";
+
+const REFERRER_POLICIES: readonly ReferrerPolicyValue[] = [
+  "origin",
+  "strict-origin-when-cross-origin",
+  "no-referrer",
+  "unsafe-url",
+];
+
+/**
+ * `referrerPolicy` por defecto del iframe cuando el proveedor no define la suya.
+ * `strict-origin-when-cross-origin` envía solo el origen a destinos cross-origin
+ * (equilibra privacidad y compatibilidad).
+ */
+export const EMBED_REFERRER_POLICY: ReferrerPolicyValue = "strict-origin-when-cross-origin";
+
+/**
+ * Lee la política de referrer del proveedor desde `public_config.referrer_policy`.
+ * Some providers (e.g. VidSrc Ad-Free Plays) require a specific Referrer Policy to
+ * identify verified domains; por eso es configurable por proveedor. Si no está
+ * definida o es inválida, cae al valor por defecto.
+ */
+export function readReferrerPolicy(
+  publicConfig: Record<string, unknown> | null | undefined,
+): ReferrerPolicyValue {
+  const v = publicConfig?.referrer_policy;
+  return REFERRER_POLICIES.includes(v as ReferrerPolicyValue)
+    ? (v as ReferrerPolicyValue)
+    : EMBED_REFERRER_POLICY;
+}
 
 // ── Timeouts de carga / fallback ─────────────────────────────────────────────
 /** Sonda de alcanzabilidad del servidor del embed (no-cors) antes de framar. */

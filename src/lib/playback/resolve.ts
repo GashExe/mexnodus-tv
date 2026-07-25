@@ -4,6 +4,7 @@ import { selectPlayback, trustToScore, type Candidate, type SelectionResult } fr
 import { DEFAULT_WEIGHTS } from "./weights";
 import { DEFAULT_AUDIO_PRIORITY, DEFAULT_SUBTITLE_PRIORITY } from "@/lib/language";
 import { getAdapter, type AdapterContext } from "@/lib/providers/registry";
+import { readReferrerPolicy, type ReferrerPolicyValue } from "@/lib/security/embed-shield";
 import type { LangCode, UserPreferences } from "@/lib/types/db";
 
 /** Adaptadores dinámicos: sintetizan la URL al vuelo, sin fila por título. */
@@ -103,9 +104,12 @@ async function loadTmdbContext(
  * TMDB). No hay fila en `media_availabilities`: la autorización es a nivel de
  * proveedor (primera parte, `is_active` + `trust_level`).
  */
-async function synthesizeDynamicCandidates(sb: Supabase, target: Target): Promise<Candidate[]> {
+async function synthesizeDynamicCandidates(
+  sb: Supabase,
+  target: Target,
+): Promise<{ candidates: Candidate[]; referrerPolicyById: Record<string, ReferrerPolicyValue> }> {
   const ctx = await loadTmdbContext(sb, target);
-  if (!ctx) return [];
+  if (!ctx) return { candidates: [], referrerPolicyById: {} };
 
   const { data: providers } = await sb
     .from("providers")
@@ -114,6 +118,9 @@ async function synthesizeDynamicCandidates(sb: Supabase, target: Target): Promis
     .in("adapter", DYNAMIC_ADAPTERS);
 
   const out: Candidate[] = [];
+  // Política de referrer por candidato: configurable por proveedor (VidSrc
+  // Ad-Free Plays requiere una específica para identificar dominios verificados).
+  const referrerPolicyById: Record<string, ReferrerPolicyValue> = {};
   for (const p of (providers ?? []) as {
     id: string;
     adapter: string;
@@ -124,9 +131,12 @@ async function synthesizeDynamicCandidates(sb: Supabase, target: Target): Promis
     const adapter = getAdapter(p.adapter);
     if (!adapter) continue;
     const sources = adapter.resolve({ ...ctx, publicConfig: p.public_config ?? {} });
+    const referrerPolicy = readReferrerPolicy(p.public_config);
     sources.forEach((s, i) => {
+      const id = `dyn:${p.id}:${target.id}:${i}`;
+      if (s.playbackType === "embed") referrerPolicyById[id] = referrerPolicy;
       out.push({
-        id: `dyn:${p.id}:${target.id}:${i}`,
+        id,
         provider_id: p.id,
         playback_type: s.playbackType,
         play_url: s.url,
@@ -151,13 +161,13 @@ async function synthesizeDynamicCandidates(sb: Supabase, target: Target): Promis
       });
     });
   }
-  return out;
+  return { candidates: out, referrerPolicyById };
 }
 
 export async function resolvePlayback(
   target: Target,
   userId: string | null,
-): Promise<{ result: SelectionResult; country: string }> {
+): Promise<{ result: SelectionResult; country: string; referrerPolicyById: Record<string, ReferrerPolicyValue> }> {
   const sb = await createClient();
 
   const col =
@@ -171,7 +181,7 @@ export async function resolvePlayback(
 
   const stored = (rows ?? []).map(toCandidate);
   const dynamic = await synthesizeDynamicCandidates(sb, target);
-  const candidates = [...stored, ...dynamic];
+  const candidates = [...stored, ...dynamic.candidates];
 
   const prefs = await loadPreferences(userId);
   const country = "MX";
@@ -186,5 +196,5 @@ export async function resolvePlayback(
     weights: DEFAULT_WEIGHTS,
   });
 
-  return { result, country };
+  return { result, country, referrerPolicyById: dynamic.referrerPolicyById };
 }

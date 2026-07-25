@@ -3,7 +3,7 @@ import { ProviderForm } from "./ProviderForm";
 import { SecurityTestButton } from "./SecurityTestButton";
 import { ProviderActiveToggle } from "./ProviderActiveToggle";
 import { Chip, TechDot } from "@/components/ui";
-import { readProviderSecurity } from "@/lib/security/embed-shield";
+import { readProviderSecurity, readReferrerPolicy } from "@/lib/security/embed-shield";
 import { getEmbedFrameOrigins } from "@/lib/security/frame-origins";
 import type { Provider, TechStatus } from "@/lib/types/db";
 
@@ -140,6 +140,7 @@ export default async function ProvidersPage() {
                 <div className="mt-3 flex flex-wrap items-center gap-1.5">
                   <Chip tone={sec.popup_risk === "high" ? "gold" : "default"}>popup: {sec.popup_risk}</Chip>
                   <Chip tone={sec.redirect_risk === "high" ? "gold" : "default"}>redirect: {sec.redirect_risk}</Chip>
+                  <Chip tone="accent">referrer: {readReferrerPolicy(p.public_config)}</Chip>
                 </div>
 
                 <div className="mt-2 font-mono text-[11px] text-ink-3">
