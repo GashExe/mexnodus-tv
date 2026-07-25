@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { deriveOrigin, collectOrigins, type ProviderOriginRow } from "./frame-origins";
+import {
+  deriveOrigin,
+  collectOrigins,
+  readExtraFrameOrigins,
+  type ProviderOriginRow,
+} from "./frame-origins";
 
 describe("deriveOrigin: origen EXACTO", () => {
   it("deriva el origen de un patrón movie_pattern completo", () => {
@@ -57,5 +62,35 @@ describe("collectOrigins: reúne y deduplica", () => {
 
   it("proveedores sin datos válidos → sin orígenes", () => {
     expect(collectOrigins([{ domain: null, public_config: null }])).toEqual([]);
+  });
+});
+
+describe("extra_frame_origins: destinos de redirección del proveedor", () => {
+  it("normaliza array, cadena con comas y cadena con espacios", () => {
+    expect(readExtraFrameOrigins({ extra_frame_origins: ["a.com", " b.com "] })).toEqual(["a.com", "b.com"]);
+    expect(readExtraFrameOrigins({ extra_frame_origins: "a.com, b.com" })).toEqual(["a.com", "b.com"]);
+    expect(readExtraFrameOrigins({ extra_frame_origins: "a.com\nb.com" })).toEqual(["a.com", "b.com"]);
+  });
+
+  it("ausente, vacío o de tipo inesperado → lista vacía", () => {
+    expect(readExtraFrameOrigins(null)).toEqual([]);
+    expect(readExtraFrameOrigins({})).toEqual([]);
+    expect(readExtraFrameOrigins({ extra_frame_origins: "" })).toEqual([]);
+    expect(readExtraFrameOrigins({ extra_frame_origins: 42 })).toEqual([]);
+  });
+
+  it("el destino del 302 entra en frame-src junto al origen del patrón", () => {
+    // Caso real: embedmaster.link responde 302 → embdmstrplayer.com.
+    const origins = collectOrigins([
+      {
+        domain: "embedmaster.link",
+        public_config: {
+          movie_pattern: "https://embedmaster.link/KEY/movie/{tmdb}",
+          extra_frame_origins: ["embdmstrplayer.com"],
+        },
+      },
+    ]);
+    expect(origins).toContain("https://embedmaster.link");
+    expect(origins).toContain("https://embdmstrplayer.com");
   });
 });

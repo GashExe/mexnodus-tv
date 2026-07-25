@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getActor, isStaff } from "@/lib/auth";
 import { assertSafeUrl } from "@/lib/ssrf";
 import { assessProvider, readProviderSecurity } from "@/lib/security/embed-shield";
-import { invalidateFrameOriginsCache } from "@/lib/security/frame-origins";
+import { invalidateFrameOriginsCache, readExtraFrameOrigins } from "@/lib/security/frame-origins";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
@@ -27,6 +27,12 @@ const providerSchema = z.object({
   movie_pattern: z.string().optional().or(z.literal("")),
   series_pattern: z.string().optional().or(z.literal("")),
   playback_type: z.enum(["hls", "dash", "file", "embed", "jellyfin", "iptv"]).optional(),
+  // Dominios extra a los que el proveedor REDIRIGE (el reproductor real). La CSP
+  // valida `frame-src` en cada salto del 302, así que deben declararse o el
+  // iframe se bloquea al redirigir. Ej.: embedmaster.link → embdmstrplayer.com.
+  extra_frame_origins: z.string().optional().or(z.literal("")),
+  // Política de referrer del iframe, configurable por proveedor (VidSrc = "origin").
+  referrer_policy: z.enum(["origin", "strict-origin-when-cross-origin", "no-referrer", "unsafe-url"]).optional(),
   // Riesgo del proveedor (SOLO analítica; no afecta el render del iframe en web).
   popup_risk: z.enum(["low", "medium", "high"]).optional(),
   redirect_risk: z.enum(["low", "medium", "high"]).optional(),
@@ -38,14 +44,26 @@ export async function createProvider(_prev: unknown, formData: FormData) {
   const parsed = providerSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
 
-  const { movie_pattern, series_pattern, playback_type, popup_risk, redirect_risk, ...providerCols } =
-    parsed.data;
+  const {
+    movie_pattern,
+    series_pattern,
+    playback_type,
+    referrer_policy,
+    extra_frame_origins,
+    popup_risk,
+    redirect_risk,
+    ...providerCols
+  } = parsed.data;
+  const extraOrigins = readExtraFrameOrigins({ extra_frame_origins });
   const public_config =
     providerCols.adapter === "pattern-embed"
       ? {
           ...(movie_pattern ? { movie_pattern } : {}),
           ...(series_pattern ? { series_pattern } : {}),
+          ...(extraOrigins.length ? { extra_frame_origins: extraOrigins } : {}),
           playback_type: playback_type ?? "embed",
+          // Política de referrer del iframe, configurable por proveedor.
+          referrer_policy: referrer_policy ?? "strict-origin-when-cross-origin",
           // Metadatos de riesgo del proveedor: SOLO analítica (panel admin + futura
           // política de bloqueo en app nativa). En web NO afectan el render del
           // iframe — los embeds se renderizan sin `sandbox` a propósito.

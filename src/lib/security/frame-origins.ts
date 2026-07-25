@@ -3,8 +3,15 @@
  * =================================================
  * Los proveedores `pattern-embed` activos definen qué orígenes puede enmarcar la
  * app. Este módulo deriva esos orígenes desde `domain` / `movie_pattern` /
- * `series_pattern` y los consulta con la llave service-role (solo servidor/edge,
- * nunca llega al navegador). NO hace falta migración ni SQL.
+ * `series_pattern` / `extra_frame_origins` y los consulta con la llave
+ * service-role (solo servidor/edge, nunca llega al navegador). NO hace falta
+ * migración ni SQL.
+ *
+ * `extra_frame_origins` existe porque VARIOS proveedores responden con un 302 a
+ * un DOMINIO DISTINTO donde vive el reproductor real (p.ej. embedmaster.link →
+ * embdmstrplayer.com). La CSP evalúa `frame-src` en CADA salto de la cadena de
+ * redirecciones, así que si solo se declara el origen del patrón, el navegador
+ * bloquea el iframe al redirigir y la reproducción queda en blanco.
  *
  * Frescura sin redeploy (Vercel multi-instancia):
  *  · La caché en memoria es SOLO una optimización de latencia por-isolate; la
@@ -34,6 +41,23 @@ export interface ProviderOriginRow {
   public_config: Record<string, unknown> | null;
 }
 
+/**
+ * Normaliza `public_config.extra_frame_origins` a una lista de cadenas. Acepta
+ * un array JSON o una cadena separada por comas/espacios/saltos de línea (que es
+ * lo que escribe el formulario del panel).
+ */
+export function readExtraFrameOrigins(
+  publicConfig: Record<string, unknown> | null | undefined,
+): string[] {
+  const raw = publicConfig?.extra_frame_origins;
+  const parts = Array.isArray(raw)
+    ? raw
+    : typeof raw === "string"
+      ? raw.split(/[\s,]+/)
+      : [];
+  return parts.filter((v): v is string => typeof v === "string" && v.trim() !== "").map((v) => v.trim());
+}
+
 /** Reúne los orígenes únicos de un conjunto de proveedores. Puro y testeable. */
 export function collectOrigins(rows: ProviderOriginRow[]): string[] {
   const set = new Set<string>();
@@ -43,6 +67,9 @@ export function collectOrigins(rows: ProviderOriginRow[]): string[] {
       deriveOrigin(cfg.movie_pattern as string | undefined),
       deriveOrigin(cfg.series_pattern as string | undefined),
       deriveOrigin(p.domain),
+      // Destinos de redirección del proveedor (el reproductor real suele vivir
+      // en otro dominio): sin ellos la CSP corta el iframe al redirigir.
+      ...readExtraFrameOrigins(cfg).map(deriveOrigin),
     ]) {
       if (o) set.add(o);
     }

@@ -35,9 +35,28 @@ export function ProviderForm() {
         <label className="text-sm sm:col-span-2">Patrón serie
           <input name="series_pattern" placeholder="https://www.mexnodus.com/tv/{tmdb}/{season}/{episode}" className={field} />
         </label>
+        {/* Varios proveedores responden 302 hacia OTRO dominio donde vive el
+            reproductor real (embedmaster.link → embdmstrplayer.com). La CSP valida
+            `frame-src` en cada salto, así que hay que declararlos aquí. */}
+        <label className="text-sm sm:col-span-2">Dominios de redirección (frame-src extra)
+          <input name="extra_frame_origins" placeholder="embdmstrplayer.com, otro-cdn.com" className={field} />
+          <span className="mt-1 block text-xs text-ink-3">
+            Separados por coma. Si el proveedor redirige a otro dominio y no lo pones aquí, el
+            iframe sale en blanco.
+          </span>
+        </label>
         <label className="text-sm">Tipo de reproducción
           <select name="playback_type" className={field} defaultValue="embed">
             {["embed", "hls", "dash", "file"].map((t) => <option key={t}>{t}</option>)}
+          </select>
+        </label>
+        {/* Some providers (e.g. VidSrc Ad-Free Plays) require a specific Referrer
+            Policy to identify verified domains. Configurable por proveedor. */}
+        <label className="text-sm">Política de referrer
+          <select name="referrer_policy" className={field} defaultValue="strict-origin-when-cross-origin">
+            {["strict-origin-when-cross-origin", "origin", "no-referrer", "unsafe-url"].map((t) => (
+              <option key={t}>{t}</option>
+            ))}
           </select>
         </label>
       </fieldset>
