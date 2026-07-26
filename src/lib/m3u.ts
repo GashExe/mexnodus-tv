@@ -93,7 +93,36 @@ export function splitCategories(group: string | null): string[] {
   return out;
 }
 
+/**
+ * Distingue una LISTA DE CANALES de un stream HLS suelto.
+ *
+ * Ambos empiezan por `#EXTM3U` y usan `#EXTINF`, pero significan cosas opuestas:
+ * en una lista, cada `#EXTINF` es un canal; en un stream, es la duración de un
+ * trocito de vídeo. Sin esta comprobación, pegar la URL de un canal concreto
+ * (p.ej. la de Azteca 7 sacada de su web) metía 17 canales fantasma llamados
+ * "Sin nombre" apuntando a ficheros `.ts`, en vez de avisar del error.
+ *
+ * Las etiquetas de abajo solo existen en un playlist de segmentos.
+ */
+export function isMediaPlaylist(text: string): boolean {
+  return /^#EXT-X-(TARGETDURATION|MEDIA-SEQUENCE)/m.test(text);
+}
+
+/** Un master playlist declara variantes de calidad: tampoco es una lista de canales. */
+export function isMasterPlaylist(text: string): boolean {
+  return /^#EXT-X-STREAM-INF/m.test(text);
+}
+
 export function parseM3U(text: string): M3uChannel[] {
+  if (isMediaPlaylist(text) || isMasterPlaylist(text)) {
+    throw new Error(
+      "Esto es un stream de vídeo, no una lista de canales. Una lista M3U trae una " +
+        "línea por canal (#EXTINF con su nombre) seguida de su URL. Lo que has pegado " +
+        "es la señal de UN canal: para añadirla, créala como canal individual en vez " +
+        "de importarla como lista.",
+    );
+  }
+
   const lines = text.split(/\r?\n/);
   const out: M3uChannel[] = [];
   let pending: Omit<M3uChannel, "url"> | null = null;

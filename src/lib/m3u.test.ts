@@ -149,3 +149,40 @@ describe("filterChannels", () => {
     expect(out).toHaveLength(2);
   });
 });
+
+describe("parseM3U: distinguir lista de canales de un stream suelto", () => {
+  it("rechaza el playlist de segmentos de un canal (caso Azteca 7)", () => {
+    const stream = [
+      "#EXTM3U",
+      "#EXT-X-VERSION:3",
+      "#EXT-X-TARGETDURATION:6",
+      "#EXT-X-MEDIA-SEQUENCE:7190",
+      "#EXTINF:6.0,",
+      "https://cdn.ejemplo.com/segmento-1.ts",
+      "#EXTINF:6.0,",
+      "https://cdn.ejemplo.com/segmento-2.ts",
+    ].join("\n");
+    // Antes creaba 2 canales "Sin nombre" apuntando a trocitos de vídeo.
+    expect(() => parseM3U(stream)).toThrow(/no es una lista de canales|stream de vídeo/i);
+  });
+
+  it("rechaza también un master playlist de calidades", () => {
+    const master = [
+      "#EXTM3U",
+      "#EXT-X-STREAM-INF:BANDWIDTH=408192,RESOLUTION=320x180",
+      "https://cdn.ejemplo.com/180p.m3u8",
+    ].join("\n");
+    expect(() => parseM3U(master)).toThrow();
+  });
+
+  it("una lista de canales normal sigue funcionando", () => {
+    const lista = [
+      "#EXTM3U",
+      '#EXTINF:-1 tvg-id="Canal5.mx" group-title="General",Canal 5',
+      "https://cdn.ejemplo.com/canal5/playlist.m3u8",
+    ].join("\n");
+    const out = parseM3U(lista);
+    expect(out).toHaveLength(1);
+    expect(out[0].name).toBe("Canal 5");
+  });
+});
