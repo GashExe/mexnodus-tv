@@ -60,6 +60,10 @@ interface Args {
   origin: string;
   prune: boolean;
   noResync: boolean;
+  /** Diagnóstico: limita el sondeo a un país (solo con --dry-run). */
+  country: string | null;
+  /** Diagnóstico: vuelca el veredicto por señal, para comparar entre máquinas. */
+  json: boolean;
 }
 
 function flagValue(argv: string[], name: string): string | undefined {
@@ -112,6 +116,8 @@ function parseArgs(argv: string[]): Args {
     // datos que valen para eso. Se activa a mano y con conocimiento de causa.
     prune: argv.includes("--prune"),
     noResync: argv.includes("--no-resync"),
+    country: flagValue(argv, "--country") ?? null,
+    json: argv.includes("--json"),
   };
 }
 
@@ -348,21 +354,27 @@ type Row = HealthStream & { review_status: string; publish_authorization: string
 async function loadPlayableStreams(
   sb: ReturnType<typeof createServiceClient>,
   limit: number | null,
+  country: string | null,
 ): Promise<Row[]> {
   const out: Row[] = [];
   for (let from = 0; ; from += PAGE) {
     const to = limit ? Math.min(from + PAGE - 1, limit - 1) : from + PAGE - 1;
     if (limit && from >= limit) break;
-    const { data, error } = await sb
+    const sel = country
+      ? "id, channel_id, play_url, priority, is_primary, tech_status, last_checked_at, channels!inner(country)"
+      : "id, channel_id, play_url, priority, is_primary, tech_status, last_checked_at";
+    let query = sb
       .from("channel_streams")
-      .select("id, channel_id, play_url, priority, is_primary, tech_status, last_checked_at")
+      .select(sel)
       .eq("is_active", true)
       .eq("review_status", "approved")
-      .eq("publish_authorization", "authorized")
-      .order("id")
-      .range(from, to);
+      .eq("publish_authorization", "authorized");
+    if (country) query = query.eq("channels.country", country);
+    const { data, error } = await query.order("id").range(from, to);
     if (error) throw new Error(`leyendo channel_streams: ${error.message}`);
-    const rows = (data ?? []) as Row[];
+    // El `select` es dinámico (con o sin join a `channels`), así que el tipo
+    // inferido por PostgREST no encaja; se acota a mano.
+    const rows = (data ?? []) as unknown as Row[];
     out.push(...rows);
     if (rows.length < to - from + 1) break;
   }
@@ -393,7 +405,7 @@ async function main(): Promise<void> {
     }
   }
 
-  const streams = await loadPlayableStreams(sb, args.limit);
+  const streams = await loadPlayableStreams(sb, args.limit, args.country);
   console.log(`[nightly] señales reproducibles a sondear: ${streams.length}`);
   if (streams.length === 0) {
     console.log("[nightly] nada que hacer");
@@ -459,6 +471,14 @@ async function main(): Promise<void> {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 12)
     .forEach(([k, v]) => console.log(`           ${String(v).padStart(5)}  ${k}`));
+
+  // 1c. Volcado por señal para comparar veredictos entre máquinas (geo-referencia).
+  if (args.json) {
+    for (const s of streams) {
+      const p = byId.get(s.id)!;
+      console.log(`JSON ${JSON.stringify({ id: s.id, v: p.verdict, r: p.reason, s: p.status })}`);
+    }
+  }
 
   // 2. Cortacircuitos — solo sobre muertes CONFIRMADAS (ver shouldAbortMutations)
   if (shouldAbortMutations(streams.length, tally.dead)) {

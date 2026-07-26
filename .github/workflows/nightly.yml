@@ -12,8 +12,11 @@ on:
   # México (p.ej. `channel01-onlymex.akamaized.net` da 200 desde México y 403
   # aquí). Esos quedan en `unknown` y siguen publicados, que es lo correcto. Para
   # evaluarlos de verdad haría falta sondear desde México (runner autoalojado).
-  schedule:
-    - cron: "0 8 * * *" # 08:00 UTC ≈ 02:00 CDMX, tráfico mínimo
+  # CRON EN PAUSA. La regla nueva retira todo canal sin señal viva, y desde un
+  # runner en EE.UU. un canal mexicano geobloqueado parece muerto. No se
+  # reactiva hasta decidir dónde se ejecuta (ver comparación GitHub vs México).
+  # schedule:
+  #   - cron: "0 8 * * *" # 08:00 UTC ≈ 02:00 CDMX
   workflow_dispatch:
     inputs:
       dry_run:
@@ -24,6 +27,10 @@ on:
         description: "Muestra a sondear. SOLO se aplica en dry-run; una ejecución real va siempre completa."
         type: string
         default: "200"
+      extra_args:
+        description: "Argumentos extra para diagnóstico, p.ej. --country MX --json"
+        type: string
+        default: ""
 
 concurrency:
   # Dos ejecuciones a la vez se pisarían al reordenar prioridades.
@@ -63,4 +70,4 @@ jobs:
             # para que cada canal se reordene con TODAS sus señales delante.
             if [ -n "${{ inputs.limit }}" ]; then ARGS="$ARGS --limit ${{ inputs.limit }}"; fi
           fi
-          npx tsx scripts/nightly.ts $ARGS
+          npx tsx scripts/nightly.ts $ARGS ${{ inputs.extra_args }}
