@@ -21,7 +21,9 @@
  * dejar fuera señales del mismo canal y promocionar una muerta. Ver `parseArgs`.
  */
 import { createServiceClient } from "@/lib/supabase/service";
-import { assertSafeUrl } from "@/lib/ssrf";
+import { assertSafeUrl, safeFetch } from "@/lib/ssrf";
+import { fetchIptvApi, apiToChannels, IPTV_API_BASE } from "@/lib/live/iptv-api";
+import { ingestChannels } from "@/lib/live/ingest";
 import {
   evaluateProbe,
   nextTechStatus,
@@ -45,12 +47,16 @@ const PROBE_TIMEOUT_MS = 12_000;
 const MAX_BYTES = 64 * 1024;
 const PAGE = 1000;
 const WRITE_CHUNK = 300;
+/** Cada cuántas sondas se informa del avance: sin esto el job es una caja negra
+ *  de 25 minutos y no se puede saber dónde murió. */
+const PROGRESS_EVERY = 2000;
 
 interface Args {
   dryRun: boolean;
   limit: number | null;
   origin: string;
   prune: boolean;
+  noResync: boolean;
 }
 
 function flagValue(argv: string[], name: string): string | undefined {
@@ -102,6 +108,7 @@ function parseArgs(argv: string[]): Args {
     // (Electron/Android/iOS), donde el CORS no aplica. Borrarlos ahora tiraría
     // datos que valen para eso. Se activa a mano y con conocimiento de causa.
     prune: argv.includes("--prune"),
+    noResync: argv.includes("--no-resync"),
   };
 }
 
@@ -124,6 +131,38 @@ interface ProbeResult {
  * devuelve) y distinguir el código de error de red. Sí se reutiliza su guardia
  * `assertSafeUrl` para no perder la protección SSRF.
  */
+/**
+ * Envoltorio que GARANTIZA que la promesa se resuelve.
+ *
+ * La ejecución programada del 26/07 sondeó 25 min y el proceso salió con código
+ * 0 sin escribir nada ni imprimir el resultado: una sonda se quedó colgada, el
+ * bucle de eventos se vació y Node terminó en silencio dando el job por bueno.
+ * Con esto, una sonda que se atasque devuelve `suspect` y el job continúa.
+ */
+async function probeSettled(url: string, origin: string): Promise<ProbeResult> {
+  let timer: NodeJS.Timeout | undefined;
+  // El temporizador NO se hace `unref`: mantener vivo el bucle de eventos es
+  // justo lo que evita que Node se cierre en silencio si una sonda se cuelga.
+  const hardStop = new Promise<ProbeResult>((resolve) => {
+    timer = setTimeout(
+      () =>
+        resolve({
+          verdict: "suspect",
+          reason: "network_soft",
+          status: null,
+          responseMs: PROBE_TIMEOUT_MS * 2,
+          error: "HardTimeout: la sonda no terminó por sí sola",
+        }),
+      PROBE_TIMEOUT_MS * 2,
+    );
+  });
+  try {
+    return await Promise.race([probe(url, origin), hardStop]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function probe(url: string, origin: string): Promise<ProbeResult> {
   const started = Date.now();
   const safe = assertSafeUrl(url);
@@ -151,16 +190,23 @@ async function probe(url: string, origin: string): Promise<ProbeResult> {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let received = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        received += value.byteLength;
-        body += decoder.decode(value, { stream: true });
-        if (received > MAX_BYTES) {
-          void reader.cancel();
-          break;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          received += value.byteLength;
+          body += decoder.decode(value, { stream: true });
+          if (received > MAX_BYTES) break;
         }
+      } finally {
+        // SIEMPRE liberar el cuerpo. Dejar una respuesta sin consumir mantiene el
+        // socket ocupado: undici no lo reutiliza y, con miles de sondas, el pool
+        // se agota y los `fetch` siguientes quedan esperando para siempre.
+        await reader.cancel().catch(() => {});
       }
+    } else if (res.body) {
+      // Respuestas de error: también hay que drenarlas o el socket se queda colgado.
+      await res.body.cancel().catch(() => {});
     }
 
     const { verdict, reason } = evaluateProbe({
@@ -195,6 +241,7 @@ async function runPool<T, R>(
   const results: R[] = new Array(items.length);
   const inFlightByHost = new Map<string, number>();
   let cursor = 0;
+  let done = 0;
 
   async function lane(): Promise<void> {
     for (;;) {
@@ -223,6 +270,10 @@ async function runPool<T, R>(
         results[index] = await worker(item);
       } finally {
         inFlightByHost.set(host, (inFlightByHost.get(host) ?? 1) - 1);
+        done++;
+        if (done % PROGRESS_EVERY === 0) {
+          console.log(`[nightly]   sondeadas ${done}/${items.length}`);
+        }
       }
     }
   }
@@ -237,6 +288,54 @@ function hostOf(url: string): string {
   } catch {
     return "invalido";
   }
+}
+
+// ── Re-sync desde iptv-org ───────────────────────────────────────────────────
+
+/**
+ * Trae el dataset canónico de iptv-org (https://iptv-org.github.io/api) e
+ * ingiere canales y señales ANTES de sondear, para que lo nuevo se compruebe en
+ * la misma pasada.
+ *
+ * El valor no está en descubrir canales —hay más canales mexicanos en la base
+ * que en iptv-org— sino en que iptv-org ACTUALIZA las URLs cuando se pudren: un
+ * canal que hoy tiene su única señal muerta puede recuperar una viva. Reutiliza
+ * las piezas del route de admin, sin duplicar lógica.
+ */
+async function resyncFromIptvOrg(
+  sb: ReturnType<typeof createServiceClient>,
+): Promise<{ created: number; channels: number }> {
+  const { data: job } = await sb
+    .from("import_jobs")
+    .insert({ kind: "m3u", source_url: IPTV_API_BASE, status: "running" })
+    .select("id")
+    .single();
+  const jobId = (job as { id: string } | null)?.id ?? "";
+
+  const fetcher = async (url: string) => {
+    const res = await safeFetch(url, { maxBytes: 24 * 1024 * 1024, timeoutMs: 60_000 });
+    if (res.status !== 200) throw new Error(`HTTP ${res.status} en ${url}`);
+    return res.body;
+  };
+
+  const { channels, streams, logos, categories } = await fetchIptvApi(fetcher);
+  const built = apiToChannels(channels, streams, logos, categories, {});
+  const { created, channels: uniqueChannels } = await ingestChannels(sb, built, {
+    jobId,
+    providerId: null,
+    // Las señales nuevas entran ya publicables: el sondeo de esta misma pasada
+    // decide si sobreviven, así que no tiene sentido dejarlas en revisión manual.
+    canAuthorize: true,
+    labelPrefix: "iptv-org-api",
+  });
+
+  if (jobId) {
+    await sb
+      .from("import_jobs")
+      .update({ status: "done", finished_at: new Date().toISOString(), summary: { created, channels: uniqueChannels, via: "nightly" } })
+      .eq("id", jobId);
+  }
+  return { created, channels: uniqueChannels };
 }
 
 // ── Carga de señales ─────────────────────────────────────────────────────────
@@ -279,6 +378,18 @@ async function main(): Promise<void> {
 
   const sb = createServiceClient();
 
+  // 0. Re-sync desde iptv-org: URLs frescas ANTES de sondear, para que lo nuevo
+  //    se compruebe en esta misma pasada. En dry-run se salta (escribiría).
+  if (!args.dryRun && !args.noResync) {
+    try {
+      const r = await resyncFromIptvOrg(sb);
+      console.log(`[nightly] re-sync iptv-org · señales nuevas=${r.created} canales=${r.channels}`);
+    } catch (e) {
+      // Que iptv-org esté caído no debe impedir el chequeo de salud.
+      console.warn("[nightly] re-sync fallido (se continúa con el sondeo):", (e as Error).message);
+    }
+  }
+
   const streams = await loadPlayableStreams(sb, args.limit);
   console.log(`[nightly] señales reproducibles a sondear: ${streams.length}`);
   if (streams.length === 0) {
@@ -287,7 +398,7 @@ async function main(): Promise<void> {
   }
 
   // 1. Sondeo
-  const probes = await runPool(streams, (s) => hostOf(s.play_url), (s) => probe(s.play_url, args.origin));
+  const probes = await runPool(streams, (s) => hostOf(s.play_url), (s) => probeSettled(s.play_url, args.origin));
   const byId = new Map<string, ProbeResult>();
   streams.forEach((s, i) => byId.set(s.id, probes[i]));
 
@@ -371,7 +482,7 @@ async function main(): Promise<void> {
   }
 
   // 5. Escritura
-  await writeStatuses(sb, updated, nextStatus, byId);
+  await writeStatuses(sb, updated, nextStatus);
   await writeChecks(sb, streams, byId);
   await applyRanking(sb, rankingChanges);
   await deleteStreams(sb, [...dedupIds, ...pruneIds]);
@@ -383,23 +494,41 @@ async function main(): Promise<void> {
 
 // ── Escrituras ───────────────────────────────────────────────────────────────
 
+/**
+ * Actualiza en LOTES agrupando por estado, no fila a fila.
+ *
+ * La versión anterior lanzaba un UPDATE por señal: 20.671 viajes de ida y vuelta
+ * a Supabase, que tardaban más que el sondeo entero y dejaban el job expuesto a
+ * morir a medias. Como `tech_status` solo tiene cuatro valores, bastan cuatro
+ * grupos. `response_ms` deja de guardarse aquí porque ya queda registrado por
+ * sonda en `stream_checks`, que es donde tiene sentido consultarlo.
+ */
 async function writeStatuses(
   sb: ReturnType<typeof createServiceClient>,
   updated: HealthStream[],
   nextStatus: Map<string, TechStatus>,
-  byId: Map<string, ProbeResult>,
 ): Promise<void> {
-  let n = 0;
+  const groups = new Map<TechStatus, string[]>();
   for (const s of updated) {
-    const { error } = await sb
-      .from("channel_streams")
-      .update({
-        tech_status: nextStatus.get(s.id),
-        last_checked_at: s.last_checked_at,
-        response_ms: byId.get(s.id)?.responseMs ?? null,
-      })
-      .eq("id", s.id);
-    if (!error) n++;
+    const st = nextStatus.get(s.id)!;
+    const list = groups.get(st) ?? [];
+    list.push(s.id);
+    groups.set(st, list);
+  }
+
+  const checkedAt = new Date().toISOString();
+  let n = 0;
+  for (const [status, ids] of groups) {
+    for (let i = 0; i < ids.length; i += WRITE_CHUNK) {
+      const slice = ids.slice(i, i + WRITE_CHUNK);
+      const { error } = await sb
+        .from("channel_streams")
+        .update({ tech_status: status, last_checked_at: checkedAt })
+        .in("id", slice);
+      if (error) throw new Error(`escribiendo tech_status: ${error.message}`);
+      n += slice.length;
+    }
+    console.log(`[nightly]   ${status}: ${ids.length}`);
   }
   console.log(`[nightly] tech_status actualizado en ${n} señales`);
 }
@@ -426,17 +555,34 @@ async function writeChecks(
   console.log(`[nightly] ${rows.length} filas en stream_checks`);
 }
 
+/**
+ * Agrupa por (priority, is_primary): la prioridad solo toma ~101 valores, así
+ * que salen un par de cientos de consultas en vez de 20.624 individuales.
+ */
 async function applyRanking(
   sb: ReturnType<typeof createServiceClient>,
   changes: { id: string; priority: number; is_primary: boolean }[],
 ): Promise<void> {
+  const groups = new Map<string, { priority: number; is_primary: boolean; ids: string[] }>();
   for (const c of changes) {
-    await sb
-      .from("channel_streams")
-      .update({ priority: c.priority, is_primary: c.is_primary })
-      .eq("id", c.id);
+    const key = `${c.priority}|${c.is_primary}`;
+    const g = groups.get(key) ?? { priority: c.priority, is_primary: c.is_primary, ids: [] };
+    g.ids.push(c.id);
+    groups.set(key, g);
   }
-  console.log(`[nightly] prioridad reordenada en ${changes.length} señales`);
+
+  for (const g of groups.values()) {
+    for (let i = 0; i < g.ids.length; i += WRITE_CHUNK) {
+      const { error } = await sb
+        .from("channel_streams")
+        .update({ priority: g.priority, is_primary: g.is_primary })
+        .in("id", g.ids.slice(i, i + WRITE_CHUNK));
+      if (error) throw new Error(`escribiendo prioridad: ${error.message}`);
+    }
+  }
+  console.log(
+    `[nightly] prioridad reordenada en ${changes.length} señales (${groups.size} consultas agrupadas)`,
+  );
 }
 
 async function deleteStreams(
@@ -511,7 +657,22 @@ async function reactivateRecovered(
   console.log(`[nightly] ${ids.length} canales reactivados (solo los que este job apagó)`);
 }
 
-main().catch((e) => {
-  console.error("[nightly] error fatal:", e);
-  process.exit(1);
+// Si `main` no llega al final, el proceso NO debe salir con éxito. El 26/07 una
+// sonda colgada vació el bucle de eventos, Node terminó con código 0 y GitHub dio
+// el job por bueno sin que se hubiera escrito una sola fila.
+let completado = false;
+process.on("exit", (code) => {
+  if (!completado && code === 0) {
+    console.error("[nightly] terminó sin completar el trabajo — se marca como fallo");
+    process.exitCode = 1;
+  }
 });
+
+main()
+  .then(() => {
+    completado = true;
+  })
+  .catch((e) => {
+    console.error("[nightly] error fatal:", e);
+    process.exit(1);
+  });

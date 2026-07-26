@@ -211,12 +211,20 @@ export function planStreamRanking(streams: HealthStream[]): RankingChange[] {
 }
 
 /**
- * Un canal se retira del catálogo solo si TODAS sus señales están confirmadas
- * muertas. Con una viva —o simplemente sin confirmar— sigue publicado.
+ * Un canal se publica SOLO si tiene al menos una señal viva.
+ *
+ * Regla endurecida a petición del usuario: calidad sobre cantidad. Antes bastaba
+ * con que no estuvieran todas confirmadas muertas, y eso dejaba en el catálogo
+ * miles de canales que no reproducían — medido: 5.059 de 13.172 sin una sola
+ * señal viva.
+ *
+ * OJO CON DÓNDE SE EJECUTA: `degraded` y `unknown` ya no salvan a un canal, y un
+ * stream restringido a México da `unknown` cuando se sondea desde fuera. Aplicar
+ * esta regla desde un runner en EE.UU. retiraría canales mexicanos que sí
+ * funcionan para el usuario final. El sondeo debe hacerse desde México.
  */
 export function planChannelActivation(streams: HealthStream[]): { is_active: boolean } {
-  if (streams.length === 0) return { is_active: false };
-  return { is_active: !streams.every((s) => s.tech_status === "offline") };
+  return { is_active: streams.some((s) => s.tech_status === "online") };
 }
 
 /**

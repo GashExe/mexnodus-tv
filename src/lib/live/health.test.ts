@@ -169,7 +169,7 @@ describe("planStreamRanking: la señal viva pasa a primaria", () => {
   });
 });
 
-describe("planChannelActivation: solo se retira lo que está del todo muerto", () => {
+describe("planChannelActivation: solo sobrevive lo que tiene señal viva", () => {
   it("con una sola señal viva el canal sigue publicado", () => {
     expect(
       planChannelActivation([
@@ -179,8 +179,16 @@ describe("planChannelActivation: solo se retira lo que está del todo muerto", (
     ).toEqual({ is_active: true });
   });
 
-  it("una señal solo degradada NO basta para retirar el canal", () => {
-    expect(planChannelActivation([st({ id: "a", tech_status: "degraded" })])).toEqual({ is_active: true });
+  it("sin ninguna viva se retira, aunque estén solo degradadas", () => {
+    expect(planChannelActivation([st({ id: "a", tech_status: "degraded" })])).toEqual({
+      is_active: false,
+    });
+  });
+
+  it("una señal sin comprobar tampoco salva al canal", () => {
+    expect(planChannelActivation([st({ id: "a", tech_status: "unknown" })])).toEqual({
+      is_active: false,
+    });
   });
 
   it("todas offline → se retira", () => {
@@ -190,6 +198,10 @@ describe("planChannelActivation: solo se retira lo que está del todo muerto", (
         st({ id: "b", tech_status: "offline" }),
       ]),
     ).toEqual({ is_active: false });
+  });
+
+  it("un canal sin señales se retira", () => {
+    expect(planChannelActivation([])).toEqual({ is_active: false });
   });
 });
 
