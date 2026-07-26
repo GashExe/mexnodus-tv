@@ -1,7 +1,8 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { selectPlayback, trustToScore, type Candidate, type SelectionResult } from "./engine";
-import { DEFAULT_WEIGHTS } from "./weights";
+import { DEFAULT_WEIGHTS, TV_WEIGHTS } from "./weights";
+import type { Surface } from "@/lib/tv/surface";
 import { DEFAULT_AUDIO_PRIORITY, DEFAULT_SUBTITLE_PRIORITY } from "@/lib/language";
 import { getAdapter, type AdapterContext } from "@/lib/providers/registry";
 import { readReferrerPolicy, type ReferrerPolicyValue } from "@/lib/security/embed-shield";
@@ -167,6 +168,13 @@ async function synthesizeDynamicCandidates(
 export async function resolvePlayback(
   target: Target,
   userId: string | null,
+  /**
+   * En TV se usa un perfil de pesos que prefiere fuentes directas sobre embeds,
+   * porque un iframe cross-origin no se puede controlar con el mando. Ver
+   * `TV_WEIGHTS`. Por defecto "web" para que los llamadores existentes no
+   * cambien de comportamiento.
+   */
+  surface: Surface = "web",
 ): Promise<{ result: SelectionResult; country: string; referrerPolicyById: Record<string, ReferrerPolicyValue> }> {
   const sb = await createClient();
 
@@ -193,7 +201,7 @@ export async function resolvePlayback(
       preferHdr: prefs?.prefer_hdr ?? false,
       country,
     },
-    weights: DEFAULT_WEIGHTS,
+    weights: surface === "tv" ? TV_WEIGHTS : DEFAULT_WEIGHTS,
   });
 
   return { result, country, referrerPolicyById: dynamic.referrerPolicyById };

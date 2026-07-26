@@ -226,6 +226,12 @@ function scoreCandidate(
   score += add("providerTrust", clamp01(c.provider_trust / 100), w.providerTrust,
     c.provider_trust >= 80 ? "Proveedor de confianza" : undefined);
 
+  // ── Reproducción directa vs. iframe de terceros ─────────────────────────
+  // Solo puntúa si el perfil de pesos lo pide (en web vale 0). Ver TV_WEIGHTS.
+  const isDirect = c.playback_type !== "embed";
+  score += add("directPlayback", isDirect ? 1 : 0, w.directPlayback,
+    isDirect && w.directPlayback > 0 ? "Reproducción directa (control total con mando)" : undefined);
+
   // ── Compatibilidad y gates suaves (ya pasaron los duros) ────────────────
   score += add("deviceCompatibility", 1, w.deviceCompatibility);
   score += add("authorization", 1, w.authorization);
