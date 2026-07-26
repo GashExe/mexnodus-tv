@@ -24,6 +24,7 @@ import {
   type EmbedEventKind,
   type ReferrerPolicyValue,
 } from "@/lib/security/embed-shield";
+import { toggleFullscreen as toggleFullscreenFor } from "@/lib/fullscreen";
 
 export interface PlayerSource {
   id: string;
@@ -343,11 +344,10 @@ export function Player({
     }
   }, [index, load]);
 
+  // Safari de iPhone no permite pantalla completa sobre un `<div>`: solo sobre el
+  // `<video>`. La cascada de compatibilidad vive en `@/lib/fullscreen` (testeada).
   const toggleFullscreen = useCallback(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    if (document.fullscreenElement) void document.exitFullscreen();
-    else void el.requestFullscreen?.();
+    toggleFullscreenFor(containerRef.current, videoRef.current, document);
   }, []);
 
   // ── posición inicial + guardado de progreso (cada 15s) ─────────────────────
