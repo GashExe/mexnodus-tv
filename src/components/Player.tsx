@@ -18,7 +18,6 @@ import {
 import {
   EMBED_ALLOW,
   EMBED_REFERRER_POLICY,
-  EMBED_PROBE_TIMEOUT_MS,
   EMBED_LOAD_TIMEOUT_MS,
   SHIELD_EVENT_SOURCE,
   isCriticalEmbedEvent,
@@ -84,7 +83,6 @@ export function Player({
 
   const advancingRef = useRef(false);
   // ── failover de fuentes `embed` (iframe cross-origin) ─────────────────────
-  const probeCtrlRef = useRef<AbortController | null>(null);
   const embedWatchdogRef = useRef<number | undefined>(undefined);
   // Un popup bloqueado por el sandbox es ÉXITO del escudo, NO un fallo: se cuenta
   // y se registra, pero jamás cambia el estado ni dispara failover.
@@ -113,9 +111,7 @@ export function Player({
       const source = sources[i];
       if (!source) return;
 
-      // cancela cualquier sonda/watchdog de un embed anterior
-      probeCtrlRef.current?.abort();
-      probeCtrlRef.current = null;
+      // cancela el watchdog de un embed anterior
       window.clearTimeout(embedWatchdogRef.current);
 
       // Fuentes `embed`: se transmiten dentro de un <iframe> (contenido servido
@@ -132,25 +128,13 @@ export function Player({
         advancingRef.current = false;
         setStatus("switching");
 
-        // Sonda de alcanzabilidad (cross-origin, no-cors): es un DIAGNÓSTICO NO
-        // CRÍTICO. Una petición bloqueada por CORS, un beacon de telemetría caído
-        // o un bache de red NO implican que el embed no reproduzca, así que su
-        // fallo NO fuerza failover. El error de reproducción real lo determina el
-        // watchdog de carga del iframe (nunca dispara `onLoad`).
-        const ctrl = new AbortController();
-        probeCtrlRef.current = ctrl;
-        const timer = window.setTimeout(() => ctrl.abort(), EMBED_PROBE_TIMEOUT_MS);
-        try {
-          await fetch(source.url, { mode: "no-cors", signal: ctrl.signal });
-        } catch (e) {
-          // No es un error de reproducción: se registra como diagnóstico y se sigue.
-          if (probeCtrlRef.current === ctrl) {
-            console.warn("[embed] sonda de alcanzabilidad no concluyente (no crítico):", e);
-          }
-        } finally {
-          window.clearTimeout(timer);
-        }
-        if (probeCtrlRef.current !== ctrl) return; // otra carga tomó el control
+        // NO se sondea la URL antes de framarla. Una `fetch` en modo `no-cors`
+        // devuelve una respuesta OPACA: `status` siempre es 0, así que no puede
+        // distinguir un 200 de un 403 — nunca pudo diagnosticar nada. A cambio
+        // costaba: duplicaba la petición al proveedor, retrasaba el iframe y, en
+        // Safari, la petición se cancela por Cross-Origin-Resource-Policy sobre
+        // la MISMA URL que el iframe necesita, llenando la consola de errores que
+        // enmascaraban el fallo real. La salud de la carga la vigila el watchdog.
         setStatus("playing"); // el iframe (render por JSX) muestra el reproductor
         // Watchdog: si el iframe no dispara `onLoad` a tiempo (servidor colgado o
         // framing bloqueado por X-Frame-Options), ESO sí es un fallo real → salta
@@ -230,7 +214,6 @@ export function Player({
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
-      probeCtrlRef.current?.abort();
       window.clearTimeout(embedWatchdogRef.current);
     };
   }, [index, load]);
