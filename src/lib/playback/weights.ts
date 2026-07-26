@@ -24,6 +24,13 @@ export interface PlaybackWeights {
   deviceCompatibility: number;
   authorization: number;
   geoAllowed: number;
+  /**
+   * Premia las fuentes que reproducimos en nuestro propio `<video>` (`hls`,
+   * `file`, `dash`) frente a las que viven en un `<iframe>` de terceros
+   * (`embed`). Vale 0 en web a propósito: allí un embed se maneja con ratón sin
+   * problema y no queremos alterar el orden que ya funciona.
+   */
+  directPlayback: number;
 }
 
 /**
@@ -47,6 +54,25 @@ export const DEFAULT_WEIGHTS: PlaybackWeights = {
   deviceCompatibility: 7,
   authorization: 20,
   geoAllowed: 10,
+  directPlayback: 0,
+};
+
+/**
+ * Perfil para la superficie de TV (Fire TV).
+ *
+ * Dentro de un `<iframe>` cross-origin no se puede inyectar teclado: con mando
+ * no hay forma de dar play, pausar ni buscar en una fuente `embed`, y tampoco se
+ * puede guardar el progreso porque no hay elemento `<video>`. Así que cuando
+ * existe una alternativa directa, gana.
+ *
+ * Es un DESEMPATE, no un filtro: 25 puntos no alcanzan para tumbar el bloque de
+ * audio latino (30) ni la autorización (20), y si el embed es la única fuente
+ * del título sigue siendo la elegida. Un catálogo mayoritariamente embed no se
+ * queda vacío en la tele.
+ */
+export const TV_WEIGHTS: PlaybackWeights = {
+  ...DEFAULT_WEIGHTS,
+  directPlayback: 25,
 };
 
 /** Preferencias que entran al motor (derivadas de user_preferences). */

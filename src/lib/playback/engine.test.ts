@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { selectPlayback, isPlayable, type Candidate } from "./engine";
 import { DEFAULT_AUDIO_PRIORITY, DEFAULT_SUBTITLE_PRIORITY } from "@/lib/language";
-import type { SelectionPreferences } from "./weights";
+import { DEFAULT_WEIGHTS, TV_WEIGHTS, type SelectionPreferences } from "./weights";
 
 const prefs: SelectionPreferences = {
   audioPriority: DEFAULT_AUDIO_PRIORITY,
@@ -134,5 +134,66 @@ describe("las razones explican la elección", () => {
     const r = selectPlayback([base({ audio_languages: ["es-MX"], stability: 95 })], { preferences: prefs });
     expect(r.primary?.reasons).toContain("Audio en español latino");
     expect(r.primary?.reasons).toContain("Fuente estable");
+  });
+});
+
+describe("directPlayback: preferir fuentes directas en TV", () => {
+  it("con DEFAULT_WEIGHTS el orden NO cambia: la web sigue igual que siempre", () => {
+    // Mismo audio y misma calidad; solo cambia el tipo. Sin el peso activo, el
+    // embed va primero por orden de llegada, que es el comportamiento actual.
+    const cands = [
+      base({ id: "embed", playback_type: "embed", play_url: "https://prov.example/e/1" }),
+      base({ id: "hls", playback_type: "hls" }),
+    ];
+    const r = selectPlayback(cands, { preferences: prefs, weights: DEFAULT_WEIGHTS });
+    expect(r.primary?.candidate.id).toBe("embed");
+    expect(r.primary?.breakdown.directPlayback).toBe(0);
+  });
+
+  it("con TV_WEIGHTS una fuente directa gana al embed en igualdad de condiciones", () => {
+    const cands = [
+      base({ id: "embed", playback_type: "embed", play_url: "https://prov.example/e/1" }),
+      base({ id: "hls", playback_type: "hls" }),
+    ];
+    const r = selectPlayback(cands, { preferences: prefs, weights: TV_WEIGHTS });
+    expect(r.primary?.candidate.id).toBe("hls");
+    expect(r.primary?.reasons).toContain("Reproducción directa (control total con mando)");
+  });
+
+  it("con TV_WEIGHTS un hls de 720p gana a un embed de 1080p", () => {
+    const cands = [
+      base({ id: "embed-1080", playback_type: "embed", resolution_height: 1080, play_url: "https://prov.example/e/1" }),
+      base({ id: "hls-720", playback_type: "hls", resolution_height: 720 }),
+    ];
+    const r = selectPlayback(cands, { preferences: prefs, weights: TV_WEIGHTS });
+    expect(r.primary?.candidate.id).toBe("hls-720");
+  });
+
+  it("es un desempate, no un filtro: el embed sigue ganando si el directo no tiene audio latino", () => {
+    // audioLatam (30) pesa más que directPlayback (25): la regla de negocio
+    // principal del motor no se subordina a la comodidad del mando.
+    const cands = [
+      base({ id: "embed-latam", playback_type: "embed", audio_languages: ["es-419"], play_url: "https://prov.example/e/1" }),
+      base({ id: "hls-en", playback_type: "hls", audio_languages: ["en"], subtitle_languages: [] }),
+    ];
+    const r = selectPlayback(cands, { preferences: prefs, weights: TV_WEIGHTS });
+    expect(r.primary?.candidate.id).toBe("embed-latam");
+  });
+
+  it("si el embed es la única fuente, en TV sigue siendo la elegida", () => {
+    const cands = [base({ id: "solo-embed", playback_type: "embed", play_url: "https://prov.example/e/1" })];
+    const r = selectPlayback(cands, { preferences: prefs, weights: TV_WEIGHTS });
+    expect(r.primary?.candidate.id).toBe("solo-embed");
+    expect(r.primary?.eligible).toBe(true);
+  });
+
+  it("un embed no autorizado sigue rechazado en TV: el gate manda sobre el peso", () => {
+    const cands = [
+      base({ id: "embed-unauth", playback_type: "embed", publish_authorization: "unauthorized" }),
+      base({ id: "hls-ok", playback_type: "hls" }),
+    ];
+    const r = selectPlayback(cands, { preferences: prefs, weights: TV_WEIGHTS });
+    expect(r.primary?.candidate.id).toBe("hls-ok");
+    expect(r.rejected.some((x) => x.candidate.id === "embed-unauth")).toBe(true);
   });
 });

@@ -25,6 +25,7 @@ import {
   type ReferrerPolicyValue,
 } from "@/lib/security/embed-shield";
 import { toggleFullscreen as toggleFullscreenFor } from "@/lib/fullscreen";
+import { requestHostTapCenter } from "@/lib/tv/bridge";
 
 export interface PlayerSource {
   id: string;
@@ -47,9 +48,27 @@ export interface PlayerProps {
   initialPosition?: number;
   progressKey?: { media_title_id?: string; episode_id?: string }; // null en canales
   onEnded?: () => void;
+  /**
+   * Modo TV (Fire TV, mando a distancia). Sustituye los `controls` nativos del
+   * VOD por la barra propia: los del navegador se recorren fatal con D-pad
+   * (el foco entra en un shadow DOM que no controlamos) y a tres metros son
+   * diminutos. También registra el player en `window.__mxTv` para que el APK
+   * pueda mandarle las teclas de reproducción del mando.
+   */
+  tv?: boolean;
 }
 
 type Status = "loading" | "playing" | "switching" | "error" | "exhausted";
+
+/** mm:ss, o h:mm:ss si pasa de la hora. */
+function fmtTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const s = Math.floor(seconds % 60);
+  const m = Math.floor((seconds / 60) % 60);
+  const h = Math.floor(seconds / 3600);
+  const mm = h > 0 ? String(m).padStart(2, "0") : String(m);
+  return `${h > 0 ? `${h}:` : ""}${mm}:${String(s).padStart(2, "0")}`;
+}
 
 export function Player({
   sources,
@@ -59,6 +78,7 @@ export function Player({
   initialPosition = 0,
   progressKey,
   onEnded,
+  tv = false,
 }: PlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -69,12 +89,22 @@ export function Player({
   const current = sources[index];
   const isEmbed = current?.playbackType === "embed";
 
-  // ── controles propios para EN VIVO (sin línea de tiempo) ──────────────────
+  // Barra propia: siempre en directo (no hay línea de tiempo que mostrar) y
+  // también en VOD cuando estamos en TV (allí los `controls` nativos estorban).
+  const customControls = isLive || tv;
+  // La línea de tiempo solo tiene sentido en VOD: un directo no se busca.
+  const showTimeline = customControls && !isLive;
+
+  // ── controles propios (EN VIVO siempre; VOD solo en TV) ───────────────────
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(1);
   const [controlsVisible, setControlsVisible] = useState(true);
   const hideTimer = useRef<number | undefined>(undefined);
+  // Posición para la línea de tiempo. Solo se sigue cuando hay barra que pintar:
+  // `timeupdate` dispara ~4 veces por segundo y en un Fire TV Stick eso cuesta.
+  const [time, setTime] = useState(0);
+  const [duration, setDuration] = useState(0);
 
   // ── calidades del stream (niveles HLS) ────────────────────────────────────
   const [levels, setLevels] = useState<{ index: number; height: number }[]>([]);
@@ -192,6 +222,17 @@ export function Player({
           return;
         }
       }
+      // Sin hls.js, un HLS solo se reproduce donde el navegador lo soporte de
+      // forma nativa: Safari e iOS. El WebView de Android NO, y ahí asignar el
+      // .m3u8 al <video> no lanza error ni fija `video.error`, así que el
+      // failover de abajo nunca se dispara y la señal se queda en negro para
+      // siempre, sin audio y sin mensaje. Se comprueba antes y se pasa a la
+      // siguiente fuente en lugar de fingir que está reproduciendo.
+      if (isHls && !video.canPlayType("application/vnd.apple.mpegurl")) {
+        handleFatal();
+        return;
+      }
+
       // nativo (Safari/iOS o archivo directo): solo un error REAL de media
       // (`video.error` presente) dispara el failover. Los fallos de iconos
       // internos de los controles de Safari (PiP/AirPlay) no fijan `video.error`
@@ -321,6 +362,79 @@ export function Player({
     setMuted(val === 0);
   }, []);
 
+  /**
+   * Sin ratón, `wakeControls` nunca se llamaba (solo colgaba de `onMouseMove`),
+   * así que el temporizador no se armaba y la barra se quedaba fija para siempre.
+   * En TV se arma al empezar a reproducir. Se limita a `tv` a propósito: en la
+   * web en vivo el comportamiento actual se queda exactamente como está.
+   */
+  useEffect(() => {
+    if (tv && status === "playing") wakeControls();
+  }, [tv, status, wakeControls]);
+
+  /** Cualquier tecla del mando revive la barra, igual que un movimiento de ratón. */
+  const onContainerKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (!customControls) return;
+      wakeControls();
+      // Si el foco está en un control, es suyo: el `range` de la línea de tiempo
+      // usa izquierda/derecha y un `button` usa espacio/enter.
+      if ((e.target as HTMLElement).closest("button, input, a, select")) return;
+      if (e.key === " " || e.key === "MediaPlayPause") {
+        e.preventDefault();
+        togglePlay();
+      }
+    },
+    [customControls, wakeControls, togglePlay],
+  );
+
+  /** Salto relativo, en segundos. No hace nada en embed (no hay `<video>`) ni en directo. */
+  const seekBy = useCallback((delta: number) => {
+    const v = videoRef.current;
+    if (!v || !Number.isFinite(v.duration) || v.duration === 0) return;
+    v.currentTime = Math.max(0, Math.min(v.duration, v.currentTime + delta));
+  }, []);
+
+  const seekTo = useCallback((seconds: number) => {
+    const v = videoRef.current;
+    if (!v || !Number.isFinite(v.duration)) return;
+    v.currentTime = seconds;
+    setTime(seconds);
+  }, []);
+
+  // Seguimiento de posición solo cuando hay línea de tiempo que pintar.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !showTimeline) return;
+    const onTime = () => setTime(v.currentTime);
+    const onMeta = () => setDuration(Number.isFinite(v.duration) ? v.duration : 0);
+    v.addEventListener("timeupdate", onTime);
+    v.addEventListener("loadedmetadata", onMeta);
+    v.addEventListener("durationchange", onMeta);
+    return () => {
+      v.removeEventListener("timeupdate", onTime);
+      v.removeEventListener("loadedmetadata", onMeta);
+      v.removeEventListener("durationchange", onMeta);
+    };
+  }, [showTimeline, index]);
+
+  /**
+   * Registro en el puente del APK. `kind` es lo que decide, del lado nativo, si
+   * play/pausa se manda por aquí o se simula un toque real en el centro del
+   * WebView — en un embed no hay `<video>` al que hablarle.
+   */
+  useEffect(() => {
+    if (!tv) return;
+    const bridge = window.__mxTv;
+    if (!bridge) return;
+    bridge.setPlayer({
+      kind: isEmbed ? "embed" : "video",
+      playPause: togglePlay,
+      seek: seekBy,
+    });
+    return () => bridge.setPlayer(null);
+  }, [tv, isEmbed, togglePlay, seekBy]);
+
   /** Cambia la calidad; -1 = automática. `nextLevel` evita el corte brusco. */
   const selectLevel = useCallback((idx: number) => {
     const hls = hlsRef.current;
@@ -417,6 +531,7 @@ export function Player({
         className="group/player relative aspect-video w-full bg-black"
         onMouseMove={isLive ? wakeControls : undefined}
         onMouseLeave={isLive ? () => setControlsVisible(false) : undefined}
+        onKeyDown={customControls ? onContainerKeyDown : undefined}
       >
         {/* Fuentes `embed`: iframe del proveedor. El resto usa <video>/hls.js.
             ⚠️ SIN atributo `sandbox` A PROPÓSITO (versión web): múltiples
@@ -440,15 +555,32 @@ export function Player({
             onLoad={() => window.clearTimeout(embedWatchdogRef.current)}
           />
         ) : (
-          /* En vivo NO lleva controles nativos: sin línea de tiempo; barra propia */
+          /* Ni en vivo ni en TV llevan controles nativos: los sustituye la barra
+             propia. En la web en VOD siguen siendo los del navegador. */
           <video
             ref={videoRef}
-            controls={!isLive}
+            controls={!customControls}
             playsInline
             className="h-full w-full"
             aria-label={`Reproduciendo ${title}`}
-            onClick={isLive ? () => { togglePlay(); wakeControls(); } : undefined}
+            onClick={customControls ? () => { togglePlay(); wakeControls(); } : undefined}
           />
+        )}
+
+        {/* Play/pausa para fuentes `embed` en TV.
+            Dentro de un iframe cross-origin no se puede inyectar teclado, así que
+            el botón le pide al APK un toque REAL en el centro del WebView, que es
+            lo único que Chromium enruta hasta el iframe. Sin esto, con mando no
+            hay absolutamente ninguna forma de arrancar la reproducción. */}
+        {tv && isEmbed && status !== "exhausted" && (
+          <button
+            onClick={() => requestHostTapCenter()}
+            data-focusable
+            aria-label="Reproducir o pausar"
+            className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-pill bg-black/45 px-6 py-3 text-base font-semibold text-white opacity-40 backdrop-blur-sm transition focus-visible:bg-accent focus-visible:opacity-100"
+          >
+            <Play size={20} fill="currentColor" /> Reproducir / Pausar
+          </button>
         )}
 
         {/* insignia EN VIVO dentro del vídeo (no bloquea los controles) */}
@@ -459,9 +591,10 @@ export function Player({
         )}
 
         {/* botón central cuando está en pausa (o el autoplay fue bloqueado) */}
-        {isLive && !playing && status === "playing" && (
+        {customControls && !isEmbed && !playing && status === "playing" && (
           <button
             onClick={() => { togglePlay(); wakeControls(); }}
+            data-focusable
             aria-label="Reproducir"
             className="absolute left-1/2 top-1/2 grid h-16 w-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/60 text-white backdrop-blur-sm transition hover:bg-accent"
           >
@@ -469,13 +602,36 @@ export function Player({
           </button>
         )}
 
-        {/* barra de controles propia (solo en vivo) */}
-        {isLive && status !== "exhausted" && (
+        {/* barra de controles propia (en vivo siempre; VOD solo en TV) */}
+        {customControls && !isEmbed && status !== "exhausted" && (
           <div
-            className={`absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/85 via-black/40 to-transparent px-3 pb-2.5 pt-12 transition-opacity duration-200 ${
+            className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/40 to-transparent px-3 pb-2.5 pt-12 transition-opacity duration-200 ${
               controlsVisible || !playing || showQuality ? "opacity-100" : "pointer-events-none opacity-0"
             }`}
           >
+            {/* Línea de tiempo (VOD). Un `range` nativo ya responde a
+                izquierda/derecha del D-pad en cuanto recibe el foco, así que no
+                hace falta lógica de arrastre: es el control correcto para mando. */}
+            {showTimeline && (
+              <div className="mb-1.5 flex items-center gap-3">
+                <span className="font-mono text-[11px] tabular-nums text-white/80">{fmtTime(time)}</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={duration || 0}
+                  step={5}
+                  value={Math.min(time, duration || 0)}
+                  onChange={(e) => seekTo(Number(e.target.value))}
+                  data-focusable
+                  aria-label="Posición"
+                  disabled={!duration}
+                  className="h-1.5 flex-1 cursor-pointer accent-accent"
+                />
+                <span className="font-mono text-[11px] tabular-nums text-white/80">{fmtTime(duration)}</span>
+              </div>
+            )}
+
+            <div className="flex items-center gap-1.5">
             <button
               onClick={togglePlay}
               data-focusable
@@ -499,6 +655,7 @@ export function Player({
               step={0.05}
               value={muted ? 0 : volume}
               onChange={(e) => changeVolume(Number(e.target.value))}
+              data-focusable
               aria-label="Volumen"
               className="hidden h-1 w-20 cursor-pointer accent-accent sm:block"
             />
@@ -530,6 +687,7 @@ export function Player({
                       <button
                         key={l.index}
                         onClick={() => selectLevel(l.index)}
+                        data-focusable
                         className={`flex w-full items-center justify-between gap-3 px-3.5 py-2 text-left text-[12px] transition hover:bg-surface-2 ${
                           level === l.index ? "text-ink" : "text-ink-2"
                         }`}
@@ -543,14 +701,16 @@ export function Player({
               </div>
             )}
 
-            <button
-              onClick={goLive}
-              data-focusable
-              title="Sincronizar con el directo"
-              className="inline-flex items-center gap-1.5 rounded-pill bg-white/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-white transition hover:bg-accent"
-            >
-              <Radio size={13} /> Al directo
-            </button>
+            {isLive && (
+              <button
+                onClick={goLive}
+                data-focusable
+                title="Sincronizar con el directo"
+                className="inline-flex items-center gap-1.5 rounded-pill bg-white/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-white transition hover:bg-accent"
+              >
+                <Radio size={13} /> Al directo
+              </button>
+            )}
             <button
               onClick={toggleFullscreen}
               data-focusable
@@ -559,6 +719,7 @@ export function Player({
             >
               <Maximize size={18} />
             </button>
+            </div>
           </div>
         )}
 

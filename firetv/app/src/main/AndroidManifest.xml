@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!--
+      Sin `leanback` declarado (aunque sea opcional) Fire OS no considera la app
+      apta para tele. Y sin marcar la pantalla táctil como NO requerida, el
+      sistema la da por incompatible y ni siquiera la lista.
+    -->
+    <uses-feature
+        android:name="android.software.leanback"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
+
+    <!--
+      `largeHeap` es la diferencia entre reproducir y que el sistema mate el
+      proceso en un Stick Lite (1GB): un WebView con vídeo más decenas de
+      pósters se come el heap por defecto y Fire OS cierra la app en seco.
+
+      `banner` es 16:9 para la pantalla de inicio de la tele; `icon` es cuadrado.
+      Usar el banner para ambos deformaba el icono en la rejilla.
+    -->
+    <application
+        android:allowBackup="false"
+        android:banner="@drawable/banner"
+        android:icon="@drawable/icon"
+        android:label="@string/app_name"
+        android:largeHeap="true"
+        android:supportsRtl="false"
+        android:theme="@style/Theme.MexNodus"
+        android:usesCleartextTraffic="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:theme="@style/Theme.MexNodus">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <!--
+                  LEANBACK_LAUNCHER es lo que hace que el icono aparezca en la
+                  pantalla de inicio del Fire TV. LAUNCHER a secas solo sirve en
+                  móvil/tablet, y sin él la app quedaría instalada pero invisible.
+                -->
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

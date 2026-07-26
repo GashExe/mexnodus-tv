@@ -73,6 +73,43 @@ body::before {
   transform: scale(1.04);
 }
 
+/* ── Superficie de TV (Fire TV) ─────────────────────────────────────────────
+   Se activa solo en /tv, donde el layout envuelve todo en .tv-root.
+
+   ¿Por qué escalar `html` y no usar un breakpoint? Porque el WebView de Fire OS
+   reporta píxeles CSS ESCALADOS POR DENSIDAD: un panel de 1080p suele verse como
+   ~960-1280px lógicos, no 1920. Un `@media (min-width: 1280px)` podría no
+   activarse nunca en el aparato. Escalando la raíz, todas las utilidades de
+   Tailwind (que van en rem) crecen a la vez y el layout se adapta a lo que
+   diga el WebView, sea lo que sea.
+
+   La clase la pone el layout raíz en <html> cuando el middleware marca la
+   petición con `x-mx-surface: tv`. No se usa `:has(.tv-root)` porque el Chromium
+   de Fire OS 7 es anterior a que `:has()` existiera, y `rem` solo mira al
+   elemento raíz — ponerlo en un <div> no serviría de nada. */
+html.tv-scale {
+  font-size: clamp(18px, 1.6vw, 30px);
+}
+
+.tv-root {
+  /* Zona segura de overscan: muchos televisores recortan el borde del panel.
+     En porcentaje, no en px, porque escala con cualquier viewport. */
+  padding: 2.5vh 3vw;
+}
+
+/* El realce de foco de escritorio es demasiado discreto a 3 metros. */
+.tv-root [data-focusable]:focus-visible {
+  box-shadow: 0 0 0 4px rgb(var(--mx-accent)), 0 0 0 10px rgb(var(--mx-accent) / 0.35);
+  transform: scale(1.06);
+}
+
+/* Sin ratón no hay `:hover`, así que el fondo del elemento activo tiene que
+   venir del foco o el usuario no sabe dónde está. */
+.tv-root a:focus-visible,
+.tv-root button:focus-visible {
+  z-index: 1;
+}
+
 ::-webkit-scrollbar { height: 10px; width: 10px; }
 ::-webkit-scrollbar-thumb { background: rgb(var(--mx-line)); border-radius: 999px; }
 ::-webkit-scrollbar-track { background: transparent; }

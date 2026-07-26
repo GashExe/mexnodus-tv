@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Sin barra de acción y a pantalla completa: en una tele cualquier cromo del
+      sistema roba espacio y no se puede pulsar con el mando.
+      El fondo es la obsidiana de la web (#0a0a0e) para que el arranque no
+      parpadee en blanco.
+    -->
+    <style name="Theme.MexNodus" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/mx_bg</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowContentTransitions">false</item>
+    </style>
+</resources>

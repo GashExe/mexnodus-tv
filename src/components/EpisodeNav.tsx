@@ -17,14 +17,25 @@ export interface EpisodeNavProps {
   seriesTitle: string;
   episodes: EpisodeNavItem[]; // todos, ordenados por temporada y número
   currentId: string;
+  /**
+   * Prefijo del destino. En TV es `/tv/watch/episode`: sin esto, saltar de
+   * episodio sacaría al usuario de la superficie de tele y le devolvería el
+   * layout de escritorio. Por defecto, la ruta web de siempre.
+   */
+  basePath?: string;
 }
 
 /**
  * Navegación de episodios para el reproductor de series: botón "siguiente
  * episodio" + popover de temporadas → episodios. Neutral respecto a la fuente:
- * solo navega a `/watch/episode/{id}`. Portado del UX de TMDB-Player.
+ * solo navega a `{basePath}/{id}`. Portado del UX de TMDB-Player.
  */
-export function EpisodeNav({ seriesTitle, episodes, currentId }: EpisodeNavProps) {
+export function EpisodeNav({
+  seriesTitle,
+  episodes,
+  currentId,
+  basePath = "/watch/episode",
+}: EpisodeNavProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
 
@@ -50,7 +61,7 @@ export function EpisodeNav({ seriesTitle, episodes, currentId }: EpisodeNavProps
 
   const go = (id: string) => {
     setOpen(false);
-    router.push(`/watch/episode/${id}`);
+    router.push(`${basePath}/${id}`);
   };
 
   const viewEps = seasons.find((s) => s.season === view)?.eps ?? [];
@@ -75,6 +86,7 @@ export function EpisodeNav({ seriesTitle, episodes, currentId }: EpisodeNavProps
             setView(current?.season_number ?? seasons[0]?.season ?? null);
             setOpen((v) => !v);
           }}
+          data-focusable
           aria-expanded={open}
           className={`inline-flex items-center gap-1.5 rounded-pill px-3.5 py-2 text-[13px] font-medium transition ${
             open ? "bg-surface-2 text-ink" : "border border-line bg-bg text-ink-2 hover:text-ink"
@@ -85,6 +97,7 @@ export function EpisodeNav({ seriesTitle, episodes, currentId }: EpisodeNavProps
 
         <button
           onClick={() => nextEp && go(nextEp.id)}
+          data-focusable
           disabled={!nextEp}
           title={
             nextEp
@@ -107,6 +120,7 @@ export function EpisodeNav({ seriesTitle, episodes, currentId }: EpisodeNavProps
               )}
               <button
                 onClick={() => setOpen(false)}
+                data-focusable
                 aria-label="Cerrar"
                 className="ml-auto grid h-7 w-7 place-items-center rounded-full text-ink-3 transition hover:bg-surface-2 hover:text-ink"
               >
@@ -121,6 +135,7 @@ export function EpisodeNav({ seriesTitle, episodes, currentId }: EpisodeNavProps
                   <button
                     key={s.season}
                     onClick={() => setView(s.season)}
+                    data-focusable
                     className={`shrink-0 rounded-pill px-3 py-1 text-[12px] font-medium transition ${
                       view === s.season
                         ? "bg-accent text-white"
@@ -141,6 +156,7 @@ export function EpisodeNav({ seriesTitle, episodes, currentId }: EpisodeNavProps
                   <li key={ep.id}>
                     <button
                       onClick={() => go(ep.id)}
+                      data-focusable
                       aria-current={active}
                       className={`flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition hover:bg-surface-2 ${
                         active ? "bg-surface-2" : ""

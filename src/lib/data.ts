@@ -15,9 +15,9 @@ async function db() {
   return createClient();
 }
 
-export async function getFeatured(kind?: MediaTitle["kind"]): Promise<MediaTitle[]> {
+export async function getFeatured(kind?: MediaTitle["kind"], limit = 18): Promise<MediaTitle[]> {
   const sb = await db();
-  let q = sb.from("media_titles").select("*").eq("is_active", true).order("popularity", { ascending: false }).limit(18);
+  let q = sb.from("media_titles").select("*").eq("is_active", true).order("popularity", { ascending: false }).limit(limit);
   if (kind) q = q.eq("kind", kind);
   const { data } = await q;
   return (data as MediaTitle[]) ?? [];
@@ -204,6 +204,49 @@ export async function getRelatedChannels(ch: Channel, limit = 9): Promise<Channe
     push(data as Channel[]);
   }
   return out;
+}
+
+/**
+ * Canales que de verdad se pueden ver AHORA. Pensado para la superficie de TV.
+ *
+ * `getChannels` no sabe nada de salud —vive en `channel_streams`— así que lista
+ * el catálogo entero: en la práctica, la mitad de las señales están `offline`
+ * según el job nocturno, y en una tele el usuario no tiene forma cómoda de ir
+ * probando hasta dar con una viva. Aquí se cruzan ambas tablas con un INNER
+ * JOIN y se exige al menos una señal sana.
+ *
+ * También se descartan las URLs `http://`: la web se sirve por https, así que
+ * el navegador las bloquea por contenido mixto y el APK las rechaza además por
+ * `usesCleartextTraffic="false"`. Son ~el 16% del catálogo y no reproducen en
+ * ningún caso; ofrecerlas solo gasta intentos del failover.
+ *
+ * NO sustituye a `getChannels`: la web de escritorio sigue usándola tal cual.
+ */
+export async function getHealthyChannels(opts: ChannelQuery = {}): Promise<Channel[]> {
+  const sb = await db();
+  let q = sb
+    .from("channels")
+    .select("*, channel_streams!inner(id)")
+    .eq("is_active", true)
+    .eq("channel_streams.is_active", true)
+    .eq("channel_streams.review_status", "approved")
+    .eq("channel_streams.publish_authorization", "authorized")
+    .eq("channel_streams.tech_status", "online")
+    .like("channel_streams.play_url", "https://%");
+
+  if (opts.kind) q = q.eq("kind", opts.kind);
+  if (opts.country) q = q.eq("country", opts.country);
+  if (opts.category) q = q.contains("categories", [opts.category]);
+
+  const { data } = await q
+    .order("logical_number", { nullsFirst: false })
+    .order("name")
+    .limit(opts.limit ?? 60);
+
+  // Fuera la columna del join: quien llama espera `Channel`, no el anidado.
+  return ((data as (Channel & { channel_streams?: unknown })[]) ?? []).map(
+    ({ channel_streams: _ignored, ...channel }) => channel as Channel,
+  );
 }
 
 export async function getPlayableChannelStreams(channelId: string): Promise<ChannelStream[]> {
