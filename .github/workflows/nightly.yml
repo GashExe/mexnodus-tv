@@ -3,14 +3,17 @@ name: Salud de señales IPTV
 # Corre aquí y no en Vercel: `vercel.json` capa las rutas API a 30s y el barrido
 # completo son decenas de minutos. Actions da 6h.
 on:
-  # CRON DESACTIVADO A PROPÓSITO. Una ejecución programada NO es dry-run: escribe.
-  # Antes de activarlo hay que lanzar el job a mano (workflow_dispatch, dry_run=true)
-  # y comparar el reparto ok/dead/suspect con el medido desde el Mac del usuario
-  # (62% / 29% / 9%). Si desde el runner de GitHub sale mucho peor, hay sesgo de
-  # geobloqueo desde datacenter y hay que endurecer la clasificación primero.
-  # Para activarlo: descomentar las dos líneas siguientes.
-  # schedule:
-  #   - cron: "0 8 * * *"   # 08:00 UTC ≈ 02:00 CDMX, tráfico mínimo
+  # ACTIVO. Una ejecución programada NO es dry-run: sondea las ~20.700 señales
+  # (~90 min) y escribe. Se activó tras comprobar que el runner ve lo mismo que
+  # una máquina en México (59/28/13 frente a 62/29/9) y que el 403 —el delator del
+  # geobloqueo— sale al 6% en ambos.
+  #
+  # LIMITACIÓN CONOCIDA: desde EE.UU. no se puede evaluar un stream restringido a
+  # México (p.ej. `channel01-onlymex.akamaized.net` da 200 desde México y 403
+  # aquí). Esos quedan en `unknown` y siguen publicados, que es lo correcto. Para
+  # evaluarlos de verdad haría falta sondear desde México (runner autoalojado).
+  schedule:
+    - cron: "0 8 * * *" # 08:00 UTC ≈ 02:00 CDMX, tráfico mínimo
   workflow_dispatch:
     inputs:
       dry_run:
