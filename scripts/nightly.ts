@@ -50,6 +50,9 @@ const WRITE_CHUNK = 300;
 /** Cada cuántas sondas se informa del avance: sin esto el job es una caja negra
  *  de 25 minutos y no se puede saber dónde murió. */
 const PROGRESS_EVERY = 2000;
+/** Concurrencia del reintento: baja a propósito, para no volver a saturar la
+ *  conexión y reproducir el falso `suspect` que se intenta descartar. */
+const RETRY_CONCURRENCY = 6;
 
 interface Args {
   dryRun: boolean;
@@ -402,8 +405,37 @@ async function main(): Promise<void> {
   const byId = new Map<string, ProbeResult>();
   streams.forEach((s, i) => byId.set(s.id, probes[i]));
 
+  // 1b. SEGUNDA OPORTUNIDAD para los sospechosos, de uno en uno y sin prisa.
+  //
+  // Con 40 sondas en paralelo la propia conexión se satura y devuelve 403,
+  // timeouts y abortos que NO son del servidor remoto. Medido: desde México
+  // salió peor (50% ok) que desde el runner de GitHub (59%), lo cual solo se
+  // explica por estorbarnos a nosotros mismos. El efecto es que canales
+  // realmente muertos (p.ej. Canal 7 SLP, que da 404 al pedirlo suelto) quedaban
+  // como `suspect` y sobrevivían. Un geobloqueo real sigue dando 403 al
+  // reintentar, así que esto no pone en riesgo a los canales mexicanos.
+  const sospechosos = streams.filter((s) => byId.get(s.id)!.verdict === "suspect");
+  if (sospechosos.length > 0) {
+    console.log(`[nightly] reintentando ${sospechosos.length} sospechosos sin concurrencia alta…`);
+    let corregidos = 0;
+    for (let i = 0; i < sospechosos.length; i += RETRY_CONCURRENCY) {
+      const lote = sospechosos.slice(i, i + RETRY_CONCURRENCY);
+      const res = await Promise.all(lote.map((s) => probeSettled(s.play_url, args.origin)));
+      lote.forEach((s, k) => {
+        if (res[k].verdict !== "suspect") {
+          byId.set(s.id, res[k]);
+          corregidos++;
+        }
+      });
+      if ((i / RETRY_CONCURRENCY) % 50 === 0) {
+        console.log(`[nightly]   reintentadas ${Math.min(i + RETRY_CONCURRENCY, sospechosos.length)}/${sospechosos.length}`);
+      }
+    }
+    console.log(`[nightly] el reintento resolvió ${corregidos} de ${sospechosos.length}`);
+  }
+
   const tally: Record<ProbeVerdict, number> = { ok: 0, dead: 0, suspect: 0 };
-  probes.forEach((p) => (tally[p.verdict] += 1));
+  streams.forEach((s) => (tally[byId.get(s.id)!.verdict] += 1));
   const failures = tally.dead + tally.suspect; // solo para el informe
   const pct = (n: number) => `${Math.round((n / streams.length) * 100)}%`;
   console.log(
