@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  evaluateProbe,
+  isMixedContent,
   classifyProbe,
   corsAllows,
   isValidHlsManifest,
@@ -268,5 +270,35 @@ describe("shouldAbortMutations: cortacircuitos sobre muertes CONFIRMADAS", () =>
 
   it("sin nada sondeado no se muta nada", () => {
     expect(shouldAbortMutations(0, 0)).toBe(true);
+  });
+});
+
+describe("contenido mixto: http:// en una página https://", () => {
+  it("marca muerta una señal http aunque el servidor responda perfecto", () => {
+    expect(
+      evaluateProbe({
+        url: "http://209.14.115.253:8081/TELENOVELAS/index.m3u8",
+        origin: ORIGIN,
+        status: 200,
+        body: MANIFEST,
+        accessControlAllowOrigin: "*",
+      }),
+    ).toEqual({ verdict: "dead", reason: "insecure_http" });
+  });
+
+  it("una señal https en el mismo sitio sigue viva", () => {
+    expect(
+      evaluateProbe({
+        url: "https://cdn.ejemplo.com/x.m3u8",
+        origin: ORIGIN,
+        status: 200,
+        body: MANIFEST,
+        accessControlAllowOrigin: "*",
+      }).verdict,
+    ).toBe("ok");
+  });
+
+  it("si la página fuese http, no hay contenido mixto", () => {
+    expect(isMixedContent("http://a/x.m3u8", "http://localhost:3000")).toBe(false);
   });
 });

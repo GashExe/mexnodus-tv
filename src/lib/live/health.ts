@@ -28,6 +28,8 @@ export type ProbeVerdict = "ok" | "dead" | "suspect";
  * (`ENOTFOUND`, `ECONNREFUSED`, `CERT_HAS_EXPIRED`…) o el nombre del error.
  */
 export interface ProbeObservation {
+  /** URL sondeada. Hace falta para detectar el contenido mixto (http en https). */
+  url?: string;
   status?: number;
   /** Cuerpo (truncado) de la respuesta; se usa para validar el manifiesto. */
   body?: string;
@@ -88,7 +90,8 @@ export type ProbeReason =
   | "http_dead"
   | "http_soft"
   | "no_manifest"
-  | "cors_blocked";
+  | "cors_blocked"
+  | "insecure_http";
 
 export interface ProbeEvaluation {
   verdict: ProbeVerdict;
@@ -100,7 +103,23 @@ export interface ProbeEvaluation {
  * el navegador rechaza esos certificados igual que nosotros, así que la señal
  * está rota para el usuario real. Nunca se desactiva la verificación TLS.
  */
+/**
+ * Un stream `http://` es INSERVIBLE desde una página `https://`: el navegador
+ * bloquea el contenido mixto activo y hls.js ni llega a pedirlo. No importa que
+ * el servidor responda perfectamente — desde Node sí responde, y por eso esto
+ * pasó desapercibido: 1.622 señales quedaban marcadas `online` y 761 canales
+ * dependían SOLO de ellas, apareciendo en el catálogo sin poder reproducir nunca.
+ */
+export function isMixedContent(url: string | undefined, origin: string | undefined): boolean {
+  if (!url || !origin) return false;
+  return origin.startsWith("https://") && url.startsWith("http://");
+}
+
 export function evaluateProbe(obs: ProbeObservation): ProbeEvaluation {
+  // Se comprueba ANTES que nada: da igual lo que responda el servidor.
+  if (isMixedContent(obs.url, obs.origin)) {
+    return { verdict: "dead", reason: "insecure_http" };
+  }
   if (obs.networkError) {
     const code = obs.networkError.toUpperCase();
     return HARD_NETWORK_ERRORS.some((e) => code.includes(e))

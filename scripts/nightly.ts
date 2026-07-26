@@ -174,6 +174,11 @@ async function probeSettled(url: string, origin: string): Promise<ProbeResult> {
 
 async function probe(url: string, origin: string): Promise<ProbeResult> {
   const started = Date.now();
+  // Contenido mixto: el navegador ni la pediría. No gastamos una sonda en ella.
+  const mixta = evaluateProbe({ url, origin });
+  if (mixta.reason === "insecure_http") {
+    return { verdict: "dead", reason: "insecure_http", status: null, responseMs: 0, error: "http en pagina https" };
+  }
   const safe = assertSafeUrl(url);
   if (!safe.ok) {
     return {
@@ -219,6 +224,7 @@ async function probe(url: string, origin: string): Promise<ProbeResult> {
     }
 
     const { verdict, reason } = evaluateProbe({
+      url,
       status: res.status,
       body,
       accessControlAllowOrigin: res.headers.get("access-control-allow-origin"),
@@ -228,7 +234,7 @@ async function probe(url: string, origin: string): Promise<ProbeResult> {
   } catch (e) {
     const err = e as { name?: string; message?: string; cause?: { code?: string } };
     const code = err.cause?.code ?? err.name ?? "UnknownError";
-    const { verdict, reason } = evaluateProbe({ networkError: code });
+    const { verdict, reason } = evaluateProbe({ url, origin, networkError: code });
     return {
       verdict,
       reason,
