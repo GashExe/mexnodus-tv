@@ -18,7 +18,7 @@ on:
         type: boolean
         default: true
       limit:
-        description: "Máximo de señales a sondear (vacío = todas)"
+        description: "Muestra a sondear. SOLO se aplica en dry-run; una ejecución real va siempre completa."
         type: string
         default: "200"
 
@@ -54,6 +54,10 @@ jobs:
           PROBE_ORIGIN: ${{ secrets.PROBE_ORIGIN }}
         run: |
           ARGS=""
-          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
-          if [ -n "${{ inputs.limit }}" ]; then ARGS="$ARGS --limit ${{ inputs.limit }}"; fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="--dry-run"
+            # El límite solo tiene sentido midiendo: una ejecución real va completa
+            # para que cada canal se reordene con TODAS sus señales delante.
+            if [ -n "${{ inputs.limit }}" ]; then ARGS="$ARGS --limit ${{ inputs.limit }}"; fi
+          fi
           npx tsx scripts/nightly.ts $ARGS

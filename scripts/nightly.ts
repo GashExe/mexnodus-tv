@@ -12,10 +12,13 @@
  * y esto son decenas de minutos.
  *
  * Uso:
- *   npm run nightly -- --dry-run            # no escribe nada, solo informa
- *   npm run nightly -- --dry-run --limit 200
- *   npm run nightly -- --limit 500          # escribe, acotado
- *   npm run nightly                         # completo
+ *   npm run nightly -- --dry-run --limit 200   # muestra, no escribe nada
+ *   npm run nightly -- --dry-run               # censo completo, sin escribir
+ *   npm run nightly                            # ejecución real (siempre completa)
+ *   npm run nightly -- --prune                 # además borra las muertas rancias
+ *
+ * `--limit` SOLO se admite con `--dry-run`: al escribir, un corte parcial puede
+ * dejar fuera señales del mismo canal y promocionar una muerta. Ver `parseArgs`.
  */
 import { createServiceClient } from "@/lib/supabase/service";
 import { assertSafeUrl } from "@/lib/ssrf";
@@ -73,9 +76,24 @@ function parseArgs(argv: string[]): Args {
         "Debe ser el dominio REAL desde el que reproduce la app: de él depende el veredicto de CORS.",
     );
   }
+
+  const dryRun = argv.includes("--dry-run");
+  const limited = Number.isFinite(limit) && limit > 0;
+  // `--limit` corta por `id`, y las señales de un canal NO son contiguas: puede
+  // entrar solo una parte. El reordenamiento se calcula por canal sobre lo
+  // cargado, así que si de un canal solo entra su señal MUERTA, esa queda sola en
+  // su grupo y se lleva la prioridad más alta — por encima de una sana que no se
+  // cargó. Inofensivo midiendo; destructivo escribiendo.
+  if (limited && !dryRun) {
+    throw new Error(
+      "--limit solo se admite junto a --dry-run. Escribiendo, un límite parcial puede " +
+        "promocionar una señal muerta por encima de una sana del mismo canal que no entró " +
+        "en el corte. Para una ejecución real, lánzala completa (sin --limit).",
+    );
+  }
   return {
-    dryRun: argv.includes("--dry-run"),
-    limit: Number.isFinite(limit) && limit > 0 ? limit : null,
+    dryRun,
+    limit: limited ? limit : null,
     origin: origin.replace(/\/$/, ""),
     // Borrar es lo ÚNICO irreversible de todo el job, y hay un motivo concreto
     // para no hacerlo por defecto: el mayor grupo de fallo medido es
