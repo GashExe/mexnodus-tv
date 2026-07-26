@@ -1,8 +1,10 @@
 import type { Metadata, Viewport } from "next";
+import { headers } from "next/headers";
 import "./globals.css";
 import { Providers } from "./providers";
 import { TopNav } from "@/components/nav/TopNav";
 import { createClient } from "@/lib/supabase/server";
+import { SURFACE_HEADER } from "@/lib/tv/surface";
 
 export const metadata: Metadata = {
   title: "MexNodus TV",
@@ -17,15 +19,33 @@ export const viewport: Viewport = {
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const isTv = (await headers()).get(SURFACE_HEADER) === "tv";
+
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
+  // En TV no hay cromo de escritorio que necesite el rol, y ahorra una consulta
+  // en un aparato lento.
   let role: string | null = null;
-  if (user) {
+  if (user && !isTv) {
     const { data } = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle();
     role = (data as { role?: string } | null)?.role ?? "user";
+  }
+
+  // La superficie de TV trae su propio cromo (nav lateral) y su propia zona
+  // segura de overscan, así que se salta el TopNav, el contenedor centrado y el
+  // footer. Se decide aquí y no con layouts raíz múltiples porque eso obligaría a
+  // mover todas las páginas existentes a un route group.
+  if (isTv) {
+    return (
+      <html lang="es" data-theme="dark" className="tv-scale" suppressHydrationWarning>
+        <body>
+          <Providers>{children}</Providers>
+        </body>
+      </html>
+    );
   }
 
   return (
