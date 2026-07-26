@@ -36,7 +36,10 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # 22 como mínimo: @supabase/supabase-js necesita el WebSocket nativo de
+          # Node 22+ y con 20 falla al construir el cliente («native WebSocket not
+          # found»). Además Actions ya marca Node 20 como deprecado.
+          node-version: "22"
           cache: npm
 
       - run: npm ci
