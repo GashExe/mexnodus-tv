@@ -577,7 +577,13 @@ export function Player({
             onClick={() => requestHostTapCenter()}
             data-focusable
             aria-label="Reproducir o pausar"
-            className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-pill bg-black/45 px-6 py-3 text-base font-semibold text-white opacity-40 backdrop-blur-sm transition focus-visible:bg-accent focus-visible:opacity-100"
+            /* `pointer-events-none` es IMPRESCINDIBLE, no cosmético: el toque que
+               manda el APK va al centro del WebView, y si este botón lo intercepta
+               nunca llega al iframe — además de reactivarse a sí mismo en bucle.
+               Sin eventos de puntero el toque lo atraviesa y llega al player del
+               proveedor, mientras el botón sigue recibiendo foco y Enter del mando.
+               Va abajo y no en el centro para no tapar el play del proveedor. */
+            className="pointer-events-none absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-pill bg-black/60 px-6 py-3 text-base font-semibold text-white opacity-60 backdrop-blur-sm transition focus-visible:bg-accent focus-visible:opacity-100"
           >
             <Play size={20} fill="currentColor" /> Reproducir / Pausar
           </button>

@@ -110,6 +110,37 @@ html.tv-scale {
   z-index: 1;
 }
 
+/* ── Pantalla completa del reproductor ──────────────────────────────────────
+   El contenedor del player lleva `aspect-video w-full`. Al entrar en pantalla
+   completa esas reglas de AUTOR ganan a las del navegador, así que el elemento
+   se queda en una caja 16:9 calculada contra el ancho anterior en lugar de
+   llenar el panel: en un Fire TV eso deja el vídeo en un cuadro pequeño arriba
+   a la izquierda sobre fondo negro.
+
+   Se fuerza el tamaño y se anula la relación de aspecto; el letterboxing lo
+   resuelve `object-fit: contain` sobre el vídeo, que respeta la proporción real
+   de la señal (muchos canales IPTV no son 16:9 exactos). */
+:fullscreen,
+:-webkit-full-screen {
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: 100vw !important;
+  max-height: 100vh !important;
+  aspect-ratio: auto !important;
+}
+:fullscreen video,
+:-webkit-full-screen video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+/* El iframe de un embed también debe llenar: su player gestiona su propio ajuste. */
+:fullscreen iframe,
+:-webkit-full-screen iframe {
+  width: 100%;
+  height: 100%;
+}
+
 ::-webkit-scrollbar { height: 10px; width: 10px; }
 ::-webkit-scrollbar-thumb { background: rgb(var(--mx-line)); border-radius: 999px; }
 ::-webkit-scrollbar-track { background: transparent; }
