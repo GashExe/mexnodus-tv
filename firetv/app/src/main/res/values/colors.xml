@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Mismos tokens que globals.css: obsidiana y rosa mexicano. -->
+    <color name="mx_bg">#0a0a0e</color>
+    <color name="mx_accent">#e91e79</color>
+    <color name="mx_accent_2">#7c3aed</color>
+    <color name="mx_ink">#f0eef6</color>
+</resources>

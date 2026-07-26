@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Banner de 320×180 que Fire OS muestra en la pantalla de inicio.
+
+  Es un vector para no meter binarios en el repo; Android lo acepta como
+  `android:banner`. Antes de publicar conviene sustituirlo por un PNG de 320×180
+  con el logotipo real: los vectores se reescalan bien pero Amazon espera un
+  bitmap y el resultado se ve más nítido.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+
+    <path
+        android:fillColor="#0a0a0e"
+        android:pathData="M0,0h320v180h-320z" />
+
+    <!-- Bloque de acento: rosa mexicano -->
+    <path
+        android:fillColor="#e91e79"
+        android:pathData="M28,58h56v56h-56z" />
+
+    <!-- "M" recortada sobre el bloque -->
+    <path
+        android:fillColor="#ffffff"
+        android:pathData="M42,102V70h8l6,12 6,-12h8v32h-8V84l-6,11 -6,-11v18z" />
+
+    <!-- Barra tipográfica: sustituye al texto para no depender de fuentes -->
+    <path
+        android:fillColor="#f0eef6"
+        android:pathData="M104,72h132v10h-132z" />
+    <path
+        android:fillColor="#e91e79"
+        android:pathData="M104,92h74v8h-74z" />
+</vector>

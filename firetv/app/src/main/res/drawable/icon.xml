@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Icono cuadrado de la app. Separado del banner 16:9 a propósito: usar el banner
+  como icono lo dejaba deformado en la rejilla de aplicaciones del Fire TV.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#0a0a0e"
+        android:pathData="M0,0h108v108h-108z" />
+
+    <!-- Bloque de acento: rosa mexicano -->
+    <path
+        android:fillColor="#e91e79"
+        android:pathData="M22,22h64v64h-64z" />
+
+    <!-- "M" recortada sobre el bloque -->
+    <path
+        android:fillColor="#ffffff"
+        android:pathData="M36,74V38h9l9,16 9,-16h9v36h-9V54l-9,15 -9,-15v20z" />
+</vector>

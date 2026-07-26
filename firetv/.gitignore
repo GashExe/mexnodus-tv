@@ -1,0 +1,9 @@
+# Artefactos de Gradle y Android Studio: se regeneran al abrir/compilar.
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
