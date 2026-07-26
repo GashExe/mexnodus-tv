@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { publicEnv } from "@/lib/env";
 import { PERMISSIONS_POLICY } from "@/lib/security/embed-shield";
 import { getEmbedFrameOrigins } from "@/lib/security/frame-origins";
+import { SURFACE_HEADER, TV_PATH_PREFIX, detectSurface, isTvClient } from "@/lib/tv/surface";
 
 /**
  * Refresca la sesión de Supabase en cada request y protege rutas privadas.
@@ -10,6 +11,12 @@ import { getEmbedFrameOrigins } from "@/lib/security/frame-origins";
  */
 export async function updateSession(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
+
+  // Marca la superficie ANTES de crear la respuesta: `NextResponse.next` copia
+  // las cabeceras en el momento de la llamada, así que fijarla después no la
+  // vería el layout raíz.
+  requestHeaders.set(SURFACE_HEADER, detectSurface(request.nextUrl.pathname));
+
   let response = NextResponse.next({ request: { headers: requestHeaders } });
 
   const supabase = createServerClient(
@@ -38,15 +45,26 @@ export async function updateSession(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const isAuthPage = path.startsWith("/login") || path.startsWith("/register");
   // /watch es PÚBLICO a propósito: reproducir no requiere cuenta. El resto sí.
+  // En TV vale lo mismo: /tv y /tv/watch son públicos, biblioteca y ajustes no.
   const isProtected =
     path.startsWith("/library") ||
     path.startsWith("/settings") ||
-    path.startsWith("/admin");
+    path.startsWith("/admin") ||
+    path.startsWith("/tv/library") ||
+    path.startsWith("/tv/settings");
 
   if (!user && isProtected) {
     const url = request.nextUrl.clone();
-    url.pathname = "/login";
+    // En TV no se teclea la contraseña: se manda a emparejar por código.
+    url.pathname = path.startsWith("/tv/") ? "/tv/link" : "/login";
     url.searchParams.set("next", path);
+    return NextResponse.redirect(url);
+  }
+
+  // El APK carga el dominio a secas; a partir de ahí navega con enlaces /tv.
+  if (path === "/" && isTvClient(request.headers.get("user-agent"))) {
+    const url = request.nextUrl.clone();
+    url.pathname = TV_PATH_PREFIX;
     return NextResponse.redirect(url);
   }
 
@@ -72,6 +90,12 @@ export async function updateSession(request: NextRequest) {
     "media-src 'self' https: blob:",
     "connect-src 'self' https://*.supabase.co https://api.themoviedb.org https: wss://*.supabase.co",
     "script-src 'self' 'unsafe-inline'",
+    // hls.js crea su demuxer en un Web Worker a partir de un blob. Sin esta
+    // directiva, CSP3 hace caer `worker-src` a `script-src`, que no permite
+    // `blob:`, y el worker queda bloqueado: hls.js se recupera solo pero pasa a
+    // demuxar en el HILO PRINCIPAL. En un PC no se nota; en un Fire TV Stick es
+    // la diferencia entre reproducir y quedarse en negro.
+    "worker-src 'self' blob:",
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self' data:",
     `frame-src ${frameSrc}`,
@@ -90,7 +114,7 @@ export async function updateSession(request: NextRequest) {
 
   // Documento de reproducción sin caché mientras se diagnostica la CSP dinámica:
   // garantiza que el `frame-src` recién actualizado se sirva siempre fresco.
-  if (path.startsWith("/watch")) {
+  if (path.startsWith("/watch") || path.startsWith("/tv/watch")) {
     response.headers.set("Cache-Control", "no-store");
   }
 
