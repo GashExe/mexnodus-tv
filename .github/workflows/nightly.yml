@@ -3,20 +3,23 @@ name: Salud de señales IPTV
 # Corre aquí y no en Vercel: `vercel.json` capa las rutas API a 30s y el barrido
 # completo son decenas de minutos. Actions da 6h.
 on:
-  # ACTIVO. Una ejecución programada NO es dry-run: sondea las ~20.700 señales
-  # (~90 min) y escribe. Se activó tras comprobar que el runner ve lo mismo que
-  # una máquina en México (59/28/13 frente a 62/29/9) y que el 403 —el delator del
-  # geobloqueo— sale al 6% en ambos.
+  # ACTIVO con la REGLA ESTRICTA: se retira todo canal sin una sola señal viva.
   #
-  # LIMITACIÓN CONOCIDA: desde EE.UU. no se puede evaluar un stream restringido a
-  # México (p.ej. `channel01-onlymex.akamaized.net` da 200 desde México y 403
-  # aquí). Esos quedan en `unknown` y siguen publicados, que es lo correcto. Para
-  # evaluarlos de verdad haría falta sondear desde México (runner autoalojado).
-  # CRON EN PAUSA. La regla nueva retira todo canal sin señal viva, y desde un
-  # runner en EE.UU. un canal mexicano geobloqueado parece muerto. No se
-  # reactiva hasta decidir dónde se ejecuta (ver comparación GitHub vs México).
-  # schedule:
-  #   - cron: "0 8 * * *" # 08:00 UTC ≈ 02:00 CDMX
+  # Decisión del usuario con los números delante. Medido señal a señal sobre las
+  # mismas 200 señales mexicanas, GitHub y una máquina en México coinciden en el
+  # 90%; 15 salen vivas solo desde México (14 de ellas por 403 = geobloqueo) y 2
+  # solo desde GitHub. Coste asumido: ~13 canales mexicanos vivos que este runner
+  # no puede ver y retirará. Se acepta a cambio de cero mantenimiento.
+  #
+  # Se recupera solo: las señales de un canal retirado se siguen sondeando cada
+  # noche (retirar el canal no desactiva sus señales), y en cuanto una responda
+  # `online` el canal vuelve — `reactivateRecovered` solo toca los que este job
+  # apagó, así que nunca resucita los duplicados de la fusión.
+  #
+  # Para recuperar los geobloqueados en cualquier momento, basta con lanzarlo
+  # desde México: `npm run nightly -- --origin https://www.mxndustv.xyz`
+  schedule:
+    - cron: "0 8 * * *" # 08:00 UTC ≈ 02:00 CDMX, tráfico mínimo
   workflow_dispatch:
     inputs:
       dry_run:
