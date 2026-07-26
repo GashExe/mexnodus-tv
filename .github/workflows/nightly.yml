@@ -1,0 +1,56 @@
+name: Salud de señales IPTV
+
+# Corre aquí y no en Vercel: `vercel.json` capa las rutas API a 30s y el barrido
+# completo son decenas de minutos. Actions da 6h.
+on:
+  # CRON DESACTIVADO A PROPÓSITO. Una ejecución programada NO es dry-run: escribe.
+  # Antes de activarlo hay que lanzar el job a mano (workflow_dispatch, dry_run=true)
+  # y comparar el reparto ok/dead/suspect con el medido desde el Mac del usuario
+  # (62% / 29% / 9%). Si desde el runner de GitHub sale mucho peor, hay sesgo de
+  # geobloqueo desde datacenter y hay que endurecer la clasificación primero.
+  # Para activarlo: descomentar las dos líneas siguientes.
+  # schedule:
+  #   - cron: "0 8 * * *"   # 08:00 UTC ≈ 02:00 CDMX, tráfico mínimo
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Solo medir, sin escribir nada"
+        type: boolean
+        default: true
+      limit:
+        description: "Máximo de señales a sondear (vacío = todas)"
+        type: string
+        default: "200"
+
+concurrency:
+  # Dos ejecuciones a la vez se pisarían al reordenar prioridades.
+  group: nightly-health
+  cancel-in-progress: false
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Sondear y aplicar
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # El veredicto de CORS depende de este origen: tiene que ser el dominio
+          # REAL desde el que reproduce la app, no localhost.
+          PROBE_ORIGIN: ${{ secrets.PROBE_ORIGIN }}
+        run: |
+          ARGS=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          if [ -n "${{ inputs.limit }}" ]; then ARGS="$ARGS --limit ${{ inputs.limit }}"; fi
+          npx tsx scripts/nightly.ts $ARGS

@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "db:reset": "supabase db reset",
     "db:push": "supabase db push",
-    "seed:tmdb": "tsx scripts/seed-tmdb.ts"
+    "seed:tmdb": "tsx scripts/seed-tmdb.ts",
+    "nightly": "tsx --env-file=.env.local scripts/nightly.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
