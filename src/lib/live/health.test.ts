@@ -115,8 +115,16 @@ describe("nextTechStatus: hacen falta dos golpes para dar por muerta", () => {
   });
 
   it("un sospechoso NUNCA llega a offline, por muchas veces que se repita", () => {
-    expect(nextTechStatus("degraded", "suspect")).toBe("degraded");
-    expect(nextTechStatus("offline", "suspect")).toBe("degraded");
+    expect(nextTechStatus("degraded", "suspect")).toBe("unknown");
+    expect(nextTechStatus("offline", "suspect")).toBe("unknown");
+  });
+
+  it("un sospechoso deja la señal en 'no sabemos', no en 'degradada'", () => {
+    // Caso real: los canales MX están geobloqueados y dan 403 desde el runner de
+    // GitHub (200 desde México). Marcarlos `degraded` los hundía por debajo de
+    // señales peores pero visibles desde fuera. `unknown` va por encima.
+    expect(nextTechStatus("unknown", "suspect")).toBe("unknown");
+    expect(nextTechStatus("online", "suspect")).toBe("unknown");
   });
 
   it("una sonda correcta rehabilita la señal de inmediato", () => {

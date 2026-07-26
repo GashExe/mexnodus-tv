@@ -141,7 +141,17 @@ export function classifyProbe(obs: ProbeObservation): ProbeVerdict {
  */
 export function nextTechStatus(current: TechStatus, verdict: ProbeVerdict): TechStatus {
   if (verdict === "ok") return "online";
-  if (verdict === "suspect") return "degraded";
+  // `suspect` significa NO SABEMOS, y eso es exactamente `unknown`.
+  //
+  // Antes devolvía `degraded`, y con datos reales resultó ser dañino: los canales
+  // mexicanos están geobloqueados (p.ej. `channel01-onlymex.akamaized.net`
+  // responde 200 desde México y 403 desde el runner de GitHub en EE.UU.). Esas
+  // señales quedaban `degraded` y el reordenamiento las hundía POR DEBAJO de otra
+  // peor que sí se ve desde fuera — justo al revés de lo que le conviene al
+  // usuario mexicano. Como `unknown` va por encima de `degraded` en el ranking,
+  // devolver `unknown` evita ese castigo y además se autocorrige: si mañana la
+  // sonda sí la alcanza, sube a `online`.
+  if (verdict === "suspect") return "unknown";
   // verdict === "dead": segundo golpe consecutivo → confirmada
   return current === "degraded" || current === "offline" ? "offline" : "degraded";
 }
