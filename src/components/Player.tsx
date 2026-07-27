@@ -24,8 +24,15 @@ import {
   type EmbedEventKind,
   type ReferrerPolicyValue,
 } from "@/lib/security/embed-shield";
-import { toggleFullscreen as toggleFullscreenFor } from "@/lib/fullscreen";
-import { requestHostTapCenter } from "@/lib/tv/bridge";
+import { toggleFullscreen as toggleFullscreenFor, isFullscreen as isFullscreenFor } from "@/lib/fullscreen";
+import {
+  buildEmbedCommand,
+  seekCommand,
+  volumeCommand,
+  parseEmbedPlayerEvent,
+  playingStateFromEvent,
+  type EmbedCommandMessage,
+} from "@/lib/embed/commands";
 
 export interface PlayerSource {
   id: string;
@@ -81,6 +88,7 @@ export function Player({
   tv = false,
 }: PlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<import("hls.js").default | null>(null);
   const [index, setIndex] = useState(0);
@@ -92,8 +100,10 @@ export function Player({
   // Barra propia: siempre en directo (no hay línea de tiempo que mostrar) y
   // también en VOD cuando estamos en TV (allí los `controls` nativos estorban).
   const customControls = isLive || tv;
-  // La línea de tiempo solo tiene sentido en VOD: un directo no se busca.
-  const showTimeline = customControls && !isLive;
+  // La línea de tiempo solo tiene sentido en VOD sobre nuestro propio <video>:
+  // un directo no se busca, y de un embed no conocemos la duración (el proveedor
+  // acepta comandos de búsqueda, pero no expone cuánto dura).
+  const showTimeline = customControls && !isLive && !isEmbed;
 
   // ── controles propios (EN VIVO siempre; VOD solo en TV) ───────────────────
   const [playing, setPlaying] = useState(false);
@@ -105,6 +115,14 @@ export function Player({
   // `timeupdate` dispara ~4 veces por segundo y en un Fire TV Stick eso cuesta.
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  // Posición dentro de un embed. Va en ref y no en estado porque solo la usa
+  // `seekBy` para calcular el destino: guardarla en estado repintaría el árbol
+  // varias veces por segundo en un aparato que no lo puede pagar.
+  const embedTimeRef = useRef(0);
+  // Pantalla completa: se sigue por evento para poder cambiar las clases del
+  // contenedor. No se resuelve con una regla `:fullscreen` en CSS porque el
+  // minificador se comía la del contenedor (las de descendientes sí pasaban).
+  const [fullscreen, setFullscreen] = useState(false);
 
   // ── calidades del stream (niveles HLS) ────────────────────────────────────
   const [levels, setLevels] = useState<{ index: number; height: number }[]>([]);
@@ -339,28 +357,60 @@ export function Player({
   }, []);
   useEffect(() => () => window.clearTimeout(hideTimer.current), []);
 
+  /**
+   * Manda un comando al player del proveedor dentro del iframe.
+   *
+   * Si la fuente no habla este protocolo, el mensaje se ignora sin más: mandarlo
+   * es inofensivo. Por eso los controles de embed se ofrecen siempre y no se
+   * espera a "detectar" soporte — esperar dejaría al usuario sin forma de dar
+   * play mientras tanto, que es justo el problema que esto resuelve.
+   */
+  const sendEmbedCommand = useCallback((msg: EmbedCommandMessage) => {
+    iframeRef.current?.contentWindow?.postMessage(msg, "*");
+  }, []);
+
   const togglePlay = useCallback(() => {
+    // En un embed no hay <video> nuestro: se le pide al proveedor.
+    if (isEmbed) {
+      sendEmbedCommand(buildEmbedCommand(playing ? "pause" : "play"));
+      // Optimista: si el proveedor emite eventos, el listener lo corrige.
+      setPlaying((p) => !p);
+      return;
+    }
     const v = videoRef.current;
     if (!v) return;
     if (v.paused) void v.play().catch(() => {});
     else v.pause();
-  }, []);
+  }, [isEmbed, playing, sendEmbedCommand]);
 
   const toggleMute = useCallback(() => {
+    if (isEmbed) {
+      sendEmbedCommand(buildEmbedCommand(muted ? "unmute" : "mute"));
+      setMuted((m) => !m);
+      return;
+    }
     const v = videoRef.current;
     if (!v) return;
     v.muted = !v.muted;
     setMuted(v.muted);
-  }, []);
+  }, [isEmbed, muted, sendEmbedCommand]);
 
-  const changeVolume = useCallback((val: number) => {
-    const v = videoRef.current;
-    if (!v) return;
-    v.volume = val;
-    v.muted = val === 0;
-    setVolume(val);
-    setMuted(val === 0);
-  }, []);
+  const changeVolume = useCallback(
+    (val: number) => {
+      setVolume(val);
+      setMuted(val === 0);
+      if (isEmbed) {
+        // El proveedor lo espera en 0..100, no en 0..1.
+        sendEmbedCommand(volumeCommand(val * 100));
+        return;
+      }
+      const v = videoRef.current;
+      if (!v) return;
+      v.volume = val;
+      v.muted = val === 0;
+    },
+    [isEmbed, sendEmbedCommand],
+  );
 
   /**
    * Sin ratón, `wakeControls` nunca se llamaba (solo colgaba de `onMouseMove`),
@@ -388,12 +438,21 @@ export function Player({
     [customControls, wakeControls, togglePlay],
   );
 
-  /** Salto relativo, en segundos. No hace nada en embed (no hay `<video>`) ni en directo. */
-  const seekBy = useCallback((delta: number) => {
-    const v = videoRef.current;
-    if (!v || !Number.isFinite(v.duration) || v.duration === 0) return;
-    v.currentTime = Math.max(0, Math.min(v.duration, v.currentTime + delta));
-  }, []);
+  /** Salto relativo, en segundos. En embed se traduce a una búsqueda absoluta. */
+  const seekBy = useCallback(
+    (delta: number) => {
+      if (isEmbed) {
+        // El proveedor solo acepta posición absoluta, y no expone la actual, así
+        // que se lleva la cuenta desde sus propios eventos `timeupdate`.
+        sendEmbedCommand(seekCommand(embedTimeRef.current + delta));
+        return;
+      }
+      const v = videoRef.current;
+      if (!v || !Number.isFinite(v.duration) || v.duration === 0) return;
+      v.currentTime = Math.max(0, Math.min(v.duration, v.currentTime + delta));
+    },
+    [isEmbed, sendEmbedCommand],
+  );
 
   const seekTo = useCallback((seconds: number) => {
     const v = videoRef.current;
@@ -401,6 +460,46 @@ export function Player({
     v.currentTime = seconds;
     setTime(seconds);
   }, []);
+
+  // Estado de pantalla completa, para poder soltar `aspect-video w-full` del
+  // contenedor: esas clases de autor ganan a las del navegador y dejaban el
+  // vídeo en una caja pequeña anclada arriba a la izquierda en vez de llenar.
+  useEffect(() => {
+    const onChange = () => setFullscreen(isFullscreenFor(document));
+    document.addEventListener("fullscreenchange", onChange);
+    document.addEventListener("webkitfullscreenchange", onChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onChange);
+      document.removeEventListener("webkitfullscreenchange", onChange);
+    };
+  }, []);
+
+  // Eventos que emite el player del proveedor dentro del iframe.
+  useEffect(() => {
+    if (!isEmbed) return;
+    function onProviderEvent(e: MessageEvent) {
+      const parsed = parseEmbedPlayerEvent(e.data);
+      if (!parsed) return;
+
+      const state = playingStateFromEvent(parsed.event);
+      if (state !== null) {
+        setPlaying(state);
+        // Que el proveedor confirme reproducción cancela el vigía de carga: es
+        // una señal mucho más fiable que el `onLoad` del iframe.
+        if (state) {
+          playbackConfirmedRef.current = true;
+          window.clearTimeout(embedWatchdogRef.current);
+          setStatus("playing");
+        }
+      }
+
+      // Posición, para poder calcular saltos relativos.
+      const info = parsed.info as { currentTime?: number; duration?: number } | undefined;
+      if (typeof info?.currentTime === "number") embedTimeRef.current = info.currentTime;
+    }
+    window.addEventListener("message", onProviderEvent);
+    return () => window.removeEventListener("message", onProviderEvent);
+  }, [isEmbed]);
 
   // Seguimiento de posición solo cuando hay línea de tiempo que pintar.
   useEffect(() => {
@@ -528,7 +627,13 @@ export function Player({
     <div className="overflow-hidden rounded-card border border-line bg-black shadow-card">
       <div
         ref={containerRef}
-        className="group/player relative aspect-video w-full bg-black"
+        /* En pantalla completa se sueltan `aspect-video` y `w-full`: son reglas
+           de autor y ganan a las del navegador, así que el elemento se quedaba
+           en una caja 16:9 más pequeña que el panel y anclada arriba a la
+           izquierda. Con h-screen/w-screen llena, y el vídeo hace letterbox. */
+        className={`group/player relative bg-black ${
+          fullscreen ? "h-screen w-screen" : "aspect-video w-full"
+        }`}
         onMouseMove={isLive ? wakeControls : undefined}
         onMouseLeave={isLive ? () => setControlsVisible(false) : undefined}
         onKeyDown={customControls ? onContainerKeyDown : undefined}
@@ -543,6 +648,7 @@ export function Player({
         {isEmbed ? (
           <iframe
             key={current.url}
+            ref={iframeRef}
             src={current.url}
             title={`Reproduciendo ${title}`}
             className="h-full w-full border-0"
@@ -561,7 +667,7 @@ export function Player({
             ref={videoRef}
             controls={!customControls}
             playsInline
-            className="h-full w-full"
+            className="h-full w-full object-contain"
             aria-label={`Reproduciendo ${title}`}
             onClick={customControls ? () => { togglePlay(); wakeControls(); } : undefined}
           />
@@ -572,23 +678,6 @@ export function Player({
             el botón le pide al APK un toque REAL en el centro del WebView, que es
             lo único que Chromium enruta hasta el iframe. Sin esto, con mando no
             hay absolutamente ninguna forma de arrancar la reproducción. */}
-        {tv && isEmbed && status !== "exhausted" && (
-          <button
-            onClick={() => requestHostTapCenter()}
-            data-focusable
-            aria-label="Reproducir o pausar"
-            /* `pointer-events-none` es IMPRESCINDIBLE, no cosmético: el toque que
-               manda el APK va al centro del WebView, y si este botón lo intercepta
-               nunca llega al iframe — además de reactivarse a sí mismo en bucle.
-               Sin eventos de puntero el toque lo atraviesa y llega al player del
-               proveedor, mientras el botón sigue recibiendo foco y Enter del mando.
-               Va abajo y no en el centro para no tapar el play del proveedor. */
-            className="pointer-events-none absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-pill bg-black/60 px-6 py-3 text-base font-semibold text-white opacity-60 backdrop-blur-sm transition focus-visible:bg-accent focus-visible:opacity-100"
-          >
-            <Play size={20} fill="currentColor" /> Reproducir / Pausar
-          </button>
-        )}
-
         {/* insignia EN VIVO dentro del vídeo (no bloquea los controles) */}
         {isLive && status === "playing" && (
           <span className="pointer-events-none absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-pill bg-black/60 px-2.5 py-1 font-mono text-[11px] uppercase tracking-wide text-white backdrop-blur-sm">
@@ -597,7 +686,7 @@ export function Player({
         )}
 
         {/* botón central cuando está en pausa (o el autoplay fue bloqueado) */}
-        {customControls && !isEmbed && !playing && status === "playing" && (
+        {customControls && !playing && status === "playing" && (
           <button
             onClick={() => { togglePlay(); wakeControls(); }}
             data-focusable
@@ -609,7 +698,7 @@ export function Player({
         )}
 
         {/* barra de controles propia (en vivo siempre; VOD solo en TV) */}
-        {customControls && !isEmbed && status !== "exhausted" && (
+        {customControls && status !== "exhausted" && (
           <div
             className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/40 to-transparent px-3 pb-2.5 pt-12 transition-opacity duration-200 ${
               controlsVisible || !playing || showQuality ? "opacity-100" : "pointer-events-none opacity-0"

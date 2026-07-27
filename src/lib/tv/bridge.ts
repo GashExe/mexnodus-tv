@@ -57,27 +57,17 @@ declare global {
   }
 }
 
-/** Esquema propio que el APK intercepta en `shouldOverrideUrlLoading`. */
-export const TV_HOST_SCHEME = "mxtv";
-
 /**
- * Pide al APK que dé un toque real en el centro del WebView.
+ * Esquema propio que el APK intercepta en `shouldOverrideUrlLoading`.
  *
- * Es la única forma de dar play dentro de un `<iframe>` cross-origin: no se le
- * puede inyectar teclado, pero un toque a nivel de sistema operativo sí lo
- * enruta Chromium hasta el iframe, y el player del proveedor lo recibe como un
- * click de usuario legítimo.
+ * Se usó para pedirle al host un toque real en el centro del WebView, que era
+ * la única forma de dar play dentro de un iframe cross-origin. Ya NO se emite
+ * desde la web: EmbedMaster expone una API de comandos por `postMessage`
+ * (`src/lib/embed/commands.ts`) que hace lo mismo de forma limpia y además
+ * permite pausar, buscar y ajustar volumen.
  *
- * Se hace navegando a `mxtv://tap-center` y NO con `addJavascriptInterface`: ese
- * expone un objeto Java que en varias versiones de WebView también alcanzan los
- * iframes — y aquí el iframe es de un tercero. Con el esquema no se expone nada,
- * y el APK además rechaza la petición si no viene del documento principal.
- *
- * Devuelve `false` fuera del APK (en un navegador normal no hay a quién pedirlo).
+ * El APK conserva el interceptor a propósito, como red de seguridad: si algún
+ * día un proveedor emitiera una navegación a este esquema, se descarta en vez
+ * de dejar el WebView en una página de error.
  */
-export function requestHostTapCenter(): boolean {
-  if (typeof window === "undefined") return false;
-  if (!navigator.userAgent.includes("MexNodusTV/")) return false;
-  window.location.href = `${TV_HOST_SCHEME}://tap-center`;
-  return true;
-}
+export const TV_HOST_SCHEME = "mxtv";

@@ -11,8 +11,12 @@ en la tele no puede dar:
    anticipa el comentario de `src/lib/security/embed-shield.ts`.
 2. **Reenvío de las teclas de reproducción** del mando, que en Fire OS no llegan
    al DOM como `keydown`. Van a `window.__mxTv.key(...)` (ver `src/lib/tv/bridge.ts`).
-3. **Toque sintético sobre el iframe** para dar play cuando la fuente es un
-   embed. Es la única forma de atravesar la frontera cross-origin.
+3. **Interceptor del esquema `mxtv://`** como red de seguridad. Se usó para
+   pedir un toque sintético sobre el iframe, que era la única forma de dar play
+   dentro de un embed; hoy eso lo resuelve la API de comandos por `postMessage`
+   de EmbedMaster (`src/lib/embed/commands.ts`). El interceptor se conserva para
+   que una navegación a ese esquema se descarte en vez de dejar el WebView en
+   una página de error.
 
 ## Compilar
 
