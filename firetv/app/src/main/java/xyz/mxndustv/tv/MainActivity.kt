@@ -89,8 +89,18 @@ class MainActivity : AppCompatActivity() {
                 // origen. Se exige `isForMainFrame` para que un proveedor de
                 // embed no pueda dispararlo desde dentro de su propio iframe.
                 if (request.url.scheme == HOST_SCHEME) {
-                    if (request.isForMainFrame && request.url.host == "tap-center") {
-                        webView.post { tapCenter() }
+                    if (request.isForMainFrame) {
+                        when (request.url.host) {
+                            // Coordenadas exactas del centro del iframe, que es
+                            // donde el proveedor dibuja su botón de play.
+                            "tap" -> {
+                                val x = request.url.getQueryParameter("x")?.toFloatOrNull()
+                                val y = request.url.getQueryParameter("y")?.toFloatOrNull()
+                                if (x != null && y != null) webView.post { tapAt(x, y) }
+                                else webView.post { tapCenter() }
+                            }
+                            "tap-center" -> webView.post { tapCenter() }
+                        }
                     }
                     return true // en cualquier caso, no se navega a mxtv://
                 }
@@ -230,10 +240,19 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    /** Toque sintético en el centro del WebView. */
-    private fun tapCenter() {
-        val x = (webView.width / 2).toFloat()
-        val y = (webView.height / 2).toFloat()
+    /** Toque sintético en el centro del WebView. Respaldo cuando no hay coordenadas. */
+    private fun tapCenter() = tapAt((webView.width / 2).toFloat(), (webView.height / 2).toFloat())
+
+    /**
+     * Toque sintético en un punto concreto, en píxeles de vista.
+     *
+     * Se acota al área del WebView: unas coordenadas fuera de rango no tocarían
+     * nada y, peor, podrían perderse en otra vista.
+     */
+    private fun tapAt(rawX: Float, rawY: Float) {
+        if (webView.width == 0 || webView.height == 0) return
+        val x = rawX.coerceIn(0f, (webView.width - 1).toFloat())
+        val y = rawY.coerceIn(0f, (webView.height - 1).toFloat())
         val down = SystemClock.uptimeMillis()
         webView.dispatchTouchEvent(
             MotionEvent.obtain(down, down, MotionEvent.ACTION_DOWN, x, y, 0),

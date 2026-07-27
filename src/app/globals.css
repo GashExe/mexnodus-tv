@@ -91,6 +91,19 @@ html.tv-scale {
   font-size: clamp(18px, 1.6vw, 30px);
 }
 
+/* Sin la nebulosa de fondo en TV. NO es una decisión estética: es una capa
+   `position: fixed` con `z-index: -1` que cubre todo el viewport, y cuando el
+   WebView de Fire OS promueve el vídeo a una superposición por hardware, la
+   perfora al fondo del orden de pintado — por debajo de esta capa. Resultado:
+   el canal decodifica perfectamente (1280x720, readyState=4, el tiempo avanza)
+   pero en pantalla se ve el degradado en vez de la imagen. En pantalla completa
+   sí se veía porque ahí el vídeo sale del contexto de apilamiento de la página.
+   De paso, un degradado a pantalla completa es repintado que un Stick agradece
+   no tener que hacer. */
+html.tv-scale body::before {
+  display: none;
+}
+
 .tv-root {
   /* Zona segura de overscan: muchos televisores recortan el borde del panel.
      En porcentaje, no en px, porque escala con cualquier viewport. */

@@ -86,3 +86,29 @@ export function requestHostTapCenter(): boolean {
   window.location.href = `${TV_HOST_SCHEME}://tap-center`;
   return true;
 }
+
+/**
+ * Toque real en un punto concreto del elemento indicado.
+ *
+ * Mejor que `requestHostTapCenter`: el centro del WebView casi nunca coincide
+ * con el centro del iframe (hay nav lateral, cabecera, la barra de señal
+ * debajo…), así que el toque a ciegas caía fuera del botón del proveedor.
+ * Aquí se calcula el centro real del iframe y se manda en píxeles de vista.
+ *
+ * `getBoundingClientRect` da píxeles CSS relativos al viewport; el
+ * `dispatchTouchEvent` del lado nativo trabaja en píxeles de vista, así que se
+ * multiplica por `devicePixelRatio` — en un Fire TV suelen diferir por 1.5 o 2.
+ */
+export function requestHostTapOn(el: Element | null): boolean {
+  if (typeof window === "undefined" || !el) return false;
+  if (!navigator.userAgent.includes("MexNodusTV/")) return false;
+
+  const r = el.getBoundingClientRect();
+  if (r.width === 0 || r.height === 0) return false;
+
+  const dpr = window.devicePixelRatio || 1;
+  const x = Math.round((r.left + r.width / 2) * dpr);
+  const y = Math.round((r.top + r.height / 2) * dpr);
+  window.location.href = `${TV_HOST_SCHEME}://tap?x=${x}&y=${y}`;
+  return true;
+}

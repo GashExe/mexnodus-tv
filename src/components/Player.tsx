@@ -25,7 +25,7 @@ import {
   type ReferrerPolicyValue,
 } from "@/lib/security/embed-shield";
 import { toggleFullscreen as toggleFullscreenFor, isFullscreen as isFullscreenFor } from "@/lib/fullscreen";
-import { requestHostTapCenter } from "@/lib/tv/bridge";
+import { requestHostTapOn } from "@/lib/tv/bridge";
 import {
   buildEmbedCommand,
   seekCommand,
@@ -385,9 +385,12 @@ export function Player({
       // El comando por sí solo NO arranca: el player del proveedor exige un
       // gesto de usuario real (política de autoplay) y un postMessage no lo es.
       // Mientras no haya emitido ningún evento —única prueba de que escucha—
-      // se refuerza con un toque real del host sobre el centro del iframe.
-      // En cuanto responda, se deja de tocar para no alternar dos veces.
-      if (!providerEventSeenRef.current) requestHostTapCenter();
+      // se refuerza con un toque real sobre el CENTRO DEL IFRAME, que es donde
+      // el proveedor dibuja su botón. Apuntar al centro del WebView fallaba:
+      // con la nav lateral y la barra de señal, ese punto cae fuera del vídeo.
+      // En cuanto el proveedor responda, se deja de tocar para no alternar dos
+      // veces.
+      if (!providerEventSeenRef.current) requestHostTapOn(iframeRef.current);
 
       // Optimista: si el proveedor emite eventos, el listener lo corrige.
       setPlaying((p) => !p);
@@ -676,7 +679,10 @@ export function Player({
            de autor y ganan a las del navegador, así que el elemento se quedaba
            en una caja 16:9 más pequeña que el panel y anclada arriba a la
            izquierda. Con h-screen/w-screen llena, y el vídeo hace letterbox. */
-        className={`group/player relative bg-black ${
+        /* `isolate` crea un contexto de apilamiento propio: así ninguna capa
+           decorativa de la página puede quedar por encima del vídeo cuando el
+           WebView lo promueve a superposición por hardware. */
+        className={`group/player relative isolate bg-black ${
           fullscreen ? "h-screen w-screen" : "aspect-video w-full"
         }`}
         onMouseMove={isLive ? wakeControls : undefined}
