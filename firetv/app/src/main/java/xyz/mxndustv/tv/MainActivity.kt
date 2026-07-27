@@ -57,6 +57,13 @@ class MainActivity : AppCompatActivity() {
         // blanco mientras carga y en una tele oscura el destello es brutal.
         webView.setBackgroundColor(ContextCompat.getColor(this, R.color.mx_bg))
 
+        // Capa por hardware explícita. El vídeo del WebView se compone en una
+        // superposición del sistema; si la vista cae a renderizado por software
+        // esa superposición no se pinta y el resultado es un recuadro negro con
+        // el audio corriendo. Es el síntoma exacto que se vio en el aparato, así
+        // que se fuerza en lugar de confiar en el valor por defecto.
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true

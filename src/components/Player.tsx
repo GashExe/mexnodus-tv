@@ -672,17 +672,31 @@ export function Player({
   }
 
   return (
-    <div className="overflow-hidden rounded-card border border-line bg-black shadow-card">
+    /* En TV, el envoltorio va SIN redondeo, sin recorte y sin sombra.
+       No es estética: un `overflow: hidden` con `border-radius` sobre un
+       <video> obliga al navegador a recortarlo con una máscara, y eso desactiva
+       la superposición por hardware del WebView de Android. La capa de vídeo se
+       perfora pero no se puede componer a través del recorte redondeado, así que
+       queda NEGRA — pese a decodificar bien (readyState=4, el tiempo avanza).
+       En pantalla completa sí se veía porque allí el vídeo sale a la vista
+       nativa, fuera de este recorte. `shadow-card` fuerza además otra capa. */
+    <div
+      className={
+        tv
+          ? "border border-line bg-black"
+          : "overflow-hidden rounded-card border border-line bg-black shadow-card"
+      }
+    >
       <div
         ref={containerRef}
         /* En pantalla completa se sueltan `aspect-video` y `w-full`: son reglas
            de autor y ganan a las del navegador, así que el elemento se quedaba
            en una caja 16:9 más pequeña que el panel y anclada arriba a la
            izquierda. Con h-screen/w-screen llena, y el vídeo hace letterbox. */
-        /* `isolate` crea un contexto de apilamiento propio: así ninguna capa
-           decorativa de la página puede quedar por encima del vídeo cuando el
-           WebView lo promueve a superposición por hardware. */
-        className={`group/player relative isolate bg-black ${
+        /* Sin `isolate` a propósito: crear un contexto de apilamiento aquí
+           fuerza una capa compuesta más, justo lo que conviene evitar para que
+           el vídeo pueda ir a la superposición por hardware. */
+        className={`group/player relative bg-black ${
           fullscreen ? "h-screen w-screen" : "aspect-video w-full"
         }`}
         onMouseMove={isLive ? wakeControls : undefined}
@@ -731,7 +745,7 @@ export function Player({
             hay absolutamente ninguna forma de arrancar la reproducción. */}
         {/* insignia EN VIVO dentro del vídeo (no bloquea los controles) */}
         {isLive && status === "playing" && (
-          <span className="pointer-events-none absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-pill bg-black/60 px-2.5 py-1 font-mono text-[11px] uppercase tracking-wide text-white backdrop-blur-sm">
+          <span className="pointer-events-none absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-pill bg-black/60 px-2.5 py-1 font-mono text-[11px] uppercase tracking-wide text-white">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-crit" /> En vivo
           </span>
         )}
@@ -742,7 +756,7 @@ export function Player({
             onClick={() => { togglePlay(); wakeControls(); }}
             data-focusable
             aria-label="Reproducir"
-            className="absolute left-1/2 top-1/2 grid h-16 w-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/60 text-white backdrop-blur-sm transition hover:bg-accent"
+            className="absolute left-1/2 top-1/2 grid h-16 w-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/60 text-white transition hover:bg-accent"
           >
             <Play size={26} fill="currentColor" className="ml-1" />
           </button>
@@ -870,7 +884,7 @@ export function Player({
         )}
 
         {(status === "switching" || status === "loading") && (
-          <div className="absolute inset-0 grid place-items-center bg-black/55 backdrop-blur-[2px]">
+          <div className="absolute inset-0 grid place-items-center bg-black/55">
             <div className="flex items-center gap-2.5 rounded-pill border border-line/60 bg-surface/95 px-4 py-2 text-sm shadow-card">
               <RefreshCw size={15} className="animate-spin text-accent" />
               {index === 0 ? "Conectando señal…" : `Probando ${sources[index]?.label?.toLowerCase() ?? `respaldo ${index}`}…`}
@@ -879,7 +893,7 @@ export function Player({
         )}
 
         {status === "exhausted" && (
-          <div className="absolute inset-0 grid place-items-center bg-black/75 p-6 text-center backdrop-blur-[2px]">
+          <div className="absolute inset-0 grid place-items-center bg-black/75 p-6 text-center">
             <div className="max-w-sm">
               <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-full bg-crit/15 text-crit">
                 <AlertTriangle size={22} />
