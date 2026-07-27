@@ -123,7 +123,12 @@ class MainActivity : AppCompatActivity() {
                 }
                 customView = view
                 customViewCallback = callback
-                container.addView(
+                // A la raíz de la ventana, NO al contenedor del WebView: colgada
+                // de un FrameLayout anidado, la vista de pantalla completa
+                // heredaba las medidas del WebView y pintaba el vídeo a 1:1 en
+                // la esquina superior izquierda en vez de escalarlo al panel.
+                view.setBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.mx_bg))
+                (window.decorView as FrameLayout).addView(
                     view,
                     FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -150,7 +155,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun hideCustomView() {
         val view = customView ?: return
-        container.removeView(view)
+        (window.decorView as FrameLayout).removeView(view)
         webView.visibility = View.VISIBLE
         customView = null
         customViewCallback?.onCustomViewHidden()

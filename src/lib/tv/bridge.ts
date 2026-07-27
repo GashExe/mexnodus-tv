@@ -57,17 +57,32 @@ declare global {
   }
 }
 
-/**
- * Esquema propio que el APK intercepta en `shouldOverrideUrlLoading`.
- *
- * Se usó para pedirle al host un toque real en el centro del WebView, que era
- * la única forma de dar play dentro de un iframe cross-origin. Ya NO se emite
- * desde la web: EmbedMaster expone una API de comandos por `postMessage`
- * (`src/lib/embed/commands.ts`) que hace lo mismo de forma limpia y además
- * permite pausar, buscar y ajustar volumen.
- *
- * El APK conserva el interceptor a propósito, como red de seguridad: si algún
- * día un proveedor emitiera una navegación a este esquema, se descarta en vez
- * de dejar el WebView en una página de error.
- */
+/** Esquema propio que el APK intercepta en `shouldOverrideUrlLoading`. */
 export const TV_HOST_SCHEME = "mxtv";
+
+/**
+ * Pide al APK un toque real en el centro del WebView.
+ *
+ * Sigue haciendo falta pese a tener la API de comandos de EmbedMaster: el player
+ * del proveedor **exige un gesto de usuario real** para arrancar (política de
+ * autoplay), y un `postMessage` no lo es. Comprobado en el aparato: el comando
+ * `play` llega y no pasa nada, mientras el botón central del proveedor sigue
+ * esperando un click.
+ *
+ * Un toque a nivel de sistema operativo sí lo enruta Chromium hasta el iframe y
+ * cuenta como activación de usuario. Los comandos por `postMessage` sí valen
+ * para pausar, buscar y ajustar volumen una vez arrancado.
+ *
+ * Se hace navegando a `mxtv://tap-center` y NO con `addJavascriptInterface`: ese
+ * expone un objeto Java que en varias versiones de WebView también alcanzan los
+ * iframes — y aquí el iframe es de un tercero. Con el esquema no se expone nada,
+ * y el APK rechaza la petición si no viene del documento principal.
+ *
+ * Devuelve `false` fuera del APK (en un navegador no hay a quién pedírselo).
+ */
+export function requestHostTapCenter(): boolean {
+  if (typeof window === "undefined") return false;
+  if (!navigator.userAgent.includes("MexNodusTV/")) return false;
+  window.location.href = `${TV_HOST_SCHEME}://tap-center`;
+  return true;
+}

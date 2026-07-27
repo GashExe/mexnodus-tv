@@ -25,6 +25,7 @@ import {
   type ReferrerPolicyValue,
 } from "@/lib/security/embed-shield";
 import { toggleFullscreen as toggleFullscreenFor, isFullscreen as isFullscreenFor } from "@/lib/fullscreen";
+import { requestHostTapCenter } from "@/lib/tv/bridge";
 import {
   buildEmbedCommand,
   seekCommand,
@@ -119,10 +120,17 @@ export function Player({
   // `seekBy` para calcular el destino: guardarla en estado repintaría el árbol
   // varias veces por segundo en un aparato que no lo puede pagar.
   const embedTimeRef = useRef(0);
+  // ¿El proveedor ha emitido alguna vez un evento? Mientras no lo haya hecho no
+  // se puede dar por hecho que escuche comandos, así que el play se refuerza con
+  // un toque real del host.
+  const providerEventSeenRef = useRef(false);
   // Pantalla completa: se sigue por evento para poder cambiar las clases del
   // contenedor. No se resuelve con una regla `:fullscreen` en CSS porque el
   // minificador se comía la del contenedor (las de descendientes sí pasaban).
   const [fullscreen, setFullscreen] = useState(false);
+  // Línea de diagnóstico que se pinta en "Detalles". Se refresca solo mientras
+  // el panel está abierto, para no repintar durante la reproducción normal.
+  const [diag, setDiag] = useState("—");
 
   // ── calidades del stream (niveles HLS) ────────────────────────────────────
   const [levels, setLevels] = useState<{ index: number; height: number }[]>([]);
@@ -373,6 +381,14 @@ export function Player({
     // En un embed no hay <video> nuestro: se le pide al proveedor.
     if (isEmbed) {
       sendEmbedCommand(buildEmbedCommand(playing ? "pause" : "play"));
+
+      // El comando por sí solo NO arranca: el player del proveedor exige un
+      // gesto de usuario real (política de autoplay) y un postMessage no lo es.
+      // Mientras no haya emitido ningún evento —única prueba de que escucha—
+      // se refuerza con un toque real del host sobre el centro del iframe.
+      // En cuanto responda, se deja de tocar para no alternar dos veces.
+      if (!providerEventSeenRef.current) requestHostTapCenter();
+
       // Optimista: si el proveedor emite eventos, el listener lo corrige.
       setPlaying((p) => !p);
       return;
@@ -480,6 +496,8 @@ export function Player({
     function onProviderEvent(e: MessageEvent) {
       const parsed = parseEmbedPlayerEvent(e.data);
       if (!parsed) return;
+      // Ha respondido: a partir de aquí los comandos bastan y sobra el toque.
+      providerEventSeenRef.current = true;
 
       const state = playingStateFromEvent(parsed.event);
       if (state !== null) {
@@ -500,6 +518,33 @@ export function Player({
     window.addEventListener("message", onProviderEvent);
     return () => window.removeEventListener("message", onProviderEvent);
   }, [isEmbed]);
+
+  /**
+   * Estado real del `<video>`, para poder diagnosticar sin ADB.
+   *
+   * La distinción que importa: si hay `videoWidth`×`videoHeight` y `readyState`
+   * alto pero la pantalla está negra, el fallo es de COMPOSICIÓN del WebView,
+   * no de decodificación — y se ataca en el lado nativo. Si no hay dimensiones,
+   * el problema es el códec o la señal.
+   */
+  useEffect(() => {
+    if (!showInfo || isEmbed) return;
+    const tick = () => {
+      const v = videoRef.current;
+      if (!v) return setDiag("sin elemento <video>");
+      const err = v.error ? ` · error=${v.error.code}` : "";
+      const hls = hlsRef.current;
+      const lvl = hls && hls.currentLevel >= 0 ? ` · nivel=${hls.levels[hls.currentLevel]?.height ?? "?"}p` : "";
+      setDiag(
+        `${v.videoWidth}x${v.videoHeight} · readyState=${v.readyState} · net=${v.networkState}` +
+          ` · ${v.paused ? "pausado" : "reproduciendo"} · t=${v.currentTime.toFixed(1)}s` +
+          ` · buf=${v.buffered.length}${lvl}${err}`,
+      );
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [showInfo, isEmbed, index]);
 
   // Seguimiento de posición solo cuando hay línea de tiempo que pintar.
   useEffect(() => {
@@ -896,6 +941,11 @@ export function Player({
           <div className="mb-1 text-ink">{title}{subtitle ? ` — ${subtitle}` : ""}</div>
           <div>tipo: {current.playbackType} · resolución declarada: {current.resolutionHeight ?? "—"}p</div>
           <div>audio: {current.audioLanguages?.join(", ") || "—"}</div>
+          {/* Diagnóstico de reproducción: sirve para distinguir un fallo de
+              decodificación (sin dimensiones, readyState bajo) de uno de
+              PINTADO (dimensiones correctas y reproduciendo, pero en negro).
+              En un Fire TV sin ADB esta es la única ventana a lo que pasa. */}
+          {!isEmbed && <div className="text-gold">{diag}</div>}
           {isEmbed && (
             <div className="text-ink-3">
               popups bloqueados (reportados): {blockedPopups}
